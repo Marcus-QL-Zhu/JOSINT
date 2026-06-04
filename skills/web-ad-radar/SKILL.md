@@ -1,6 +1,6 @@
 ---
 name: web-ad-radar
-description: Crawl competitor recruitment-agency job advertisements in Mainland China and generate Markdown reports with job titles, URLs, and likely hidden-employer guesses. Use when asked to monitor Michael Page competitors, run daily job-ad radar, crawl Robert Walters/Robert Half/Morgan Philips/Morgan McKinley/Hays/Randstad/RGF/PERSOLKELLY China jobs, or infer the end client behind recruiter job ads.
+description: Crawl competitor recruitment-agency job advertisements in Mainland China and generate Markdown reports with job titles, URLs, and likely hidden-employer guesses. Use when asked to monitor Michael Page competitors, run daily job-ad radar, crawl Robert Half/Morgan Philips/Morgan McKinley/Hays/Randstad/RGF/IntelliPro/Risfond China jobs, or infer the end client behind recruiter job ads.
 ---
 
 # Web Ad Radar
@@ -23,6 +23,7 @@ python <skill-root>/scripts/run_radar.py --workspace . --companies randstad --cr
 python <skill-root>/scripts/run_radar.py --workspace . --companies randstad --analysis-limit 3
 ```
 
+When no date flags are supplied, the runner targets yesterday's Asia/Shanghai business date. This is intended for early-morning OpenClaw scheduled runs.
 Use `--offline-sample` only for local smoke tests that should not touch real websites or APIs.
 Use `--analysis-limit N` for small real-analysis batches; omit it for full scheduled analysis.
 
@@ -44,9 +45,10 @@ The runner writes:
 - `reports/web-ad-radar-YYYY-MM-DD.md`
 - `data/jobs.sqlite`
 
-The Markdown report is written in Chinese. It lists source, job title, location, date, URL, employer guess, confidence, evidence, and source errors.
+The Markdown report is written in Chinese. It lists source, job title, JD, location, publish date, crawl date, URL, employer guess, confidence, evidence, and source errors.
 It also includes function labels, industry labels, and label confidence. Labels are restricted to the configured enum sets.
 Job title and JD are stored and reported separately. `title` should be a clean role name; `jd_text` contains responsibilities, requirements, company introductions, and other JD content.
+For date-aware sources, only jobs in the requested date range are included. For sources without reliable publish/update dates, the crawler follows pagination until it has collected the fallback sample size, currently 30 jobs per source.
 API usage is appended to `data/api_usage.jsonl` with provider, stage, model, success, latency, batch size, and job ids. API keys are never logged.
 
 ## APIs

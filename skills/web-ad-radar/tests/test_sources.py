@@ -19,6 +19,30 @@ class FailingAdapter(SourceAdapter):
         raise RuntimeError("site unavailable")
 
 
+class PaginatedNoDateAdapter(SourceAdapter):
+    slug = "paginated-no-date"
+    name = "Paginated No Date"
+    start_url = "https://example.com/jobs"
+    include_url_patterns = ("/job/",)
+    max_pages = 5
+    target_job_count_without_dates = 30
+
+    def page_url(self, page_number):
+        return self.start_url if page_number == 1 else f"{self.start_url}?page={page_number}"
+
+
+class PaginatedDatedAdapter(SourceAdapter):
+    slug = "paginated-dated"
+    name = "Paginated Dated"
+    start_url = "https://example.com/jobs"
+    include_url_patterns = ("/job/",)
+    date_aware = True
+    max_pages = 5
+
+    def page_url(self, page_number):
+        return self.start_url if page_number == 1 else f"{self.start_url}?page={page_number}"
+
+
 class SourceAdapterTest(unittest.TestCase):
     def test_crawl_fetches_detail_text_for_each_job(self):
         def fetch(url):
@@ -54,6 +78,56 @@ class SourceAdapterTest(unittest.TestCase):
         self.assertEqual(jobs[0].location, "Shanghai")
         self.assertEqual(jobs[0].published_at, "2026-06-04")
         self.assertEqual(jobs[0].first_seen_at, "2026-06-04")
+
+    def test_no_date_source_crawls_pages_until_fallback_target_count(self):
+        pages = {}
+        for page in range(1, 5):
+            pages["https://example.com/jobs" if page == 1 else f"https://example.com/jobs?page={page}"] = "".join(
+                f'<a href="/job/role-{page}-{index}">Role {page}-{index}</a>'
+                for index in range(1, 11)
+            )
+
+        def fetch(url):
+            if "/job/" in url:
+                return "<main><h1>Role</h1><p>Responsibilities for this role.</p></main>"
+            return pages[url]
+
+        adapter = PaginatedNoDateAdapter(fetch=fetch)
+
+        jobs = adapter.crawl("2026-06-05", date_from="2026-06-04", date_to="2026-06-04")
+
+        self.assertEqual(len(jobs), 30)
+        self.assertEqual(jobs[0].title, "Role 1-1")
+        self.assertEqual(jobs[-1].title, "Role 3-10")
+        self.assertTrue(all(job.published_at is None for job in jobs))
+        self.assertTrue(all(job.first_seen_at == "2026-06-05" for job in jobs))
+
+    def test_date_aware_source_keeps_only_target_date_across_pages(self):
+        pages = {
+            "https://example.com/jobs": """
+                <article><a href="/job/new-1">New 1</a><time datetime="2026-06-04"></time></article>
+                <article><a href="/job/new-2">New 2</a><time datetime="2026-06-04"></time></article>
+            """,
+            "https://example.com/jobs?page=2": """
+                <article><a href="/job/new-3">New 3</a><time datetime="2026-06-04"></time></article>
+                <article><a href="/job/old-1">Old 1</a><time datetime="2026-06-03"></time></article>
+            """,
+            "https://example.com/jobs?page=3": """
+                <article><a href="/job/old-2">Old 2</a><time datetime="2026-06-03"></time></article>
+            """,
+        }
+
+        def fetch(url):
+            if "/job/" in url:
+                return "<main><h1>Role</h1><p>Responsibilities for this dated role.</p></main>"
+            return pages.get(url, "")
+
+        adapter = PaginatedDatedAdapter(fetch=fetch)
+
+        jobs = adapter.crawl("2026-06-05", date_from="2026-06-04", date_to="2026-06-04")
+
+        self.assertEqual([job.title for job in jobs], ["New 1", "New 2", "New 3"])
+        self.assertTrue(all(job.published_at == "2026-06-04" for job in jobs))
 
     def test_crawl_sources_records_errors_and_continues(self):
         ok = DummyAdapter(fetch=lambda url: '<a href="/job/a">Role A</a>')
@@ -106,6 +180,24 @@ class SourceAdapterTest(unittest.TestCase):
         self.assertEqual(len(jobs), 2)
         self.assertEqual(jobs[0].title, "Senior Finance Manager")
         self.assertEqual(jobs[1].title, "principal software engineer")
+
+    def test_morgan_mckinley_encodes_chinese_detail_urls(self):
+        from radar.sources.registry import MorganMcKinleyAdapter
+
+        listing = '<a href="/en/jobs/shanghai/多资产投资经理/1070751">多资产投资经理</a>'
+        encoded_url = "https://www.morganmckinley.com.cn/en/jobs/shanghai/%E5%A4%9A%E8%B5%84%E4%BA%A7%E6%8A%95%E8%B5%84%E7%BB%8F%E7%90%86/1070751"
+
+        def fetch(url):
+            if url.endswith("/en/jobs"):
+                return listing
+            self.assertEqual(url, encoded_url)
+            return "<main><h1>多资产投资经理</h1><h2>Job Description</h2><p>负责多资产投资组合管理和风险控制。</p></main>"
+
+        adapter = MorganMcKinleyAdapter(fetch=fetch)
+
+        jobs = adapter.crawl("2026-06-05")
+
+        self.assertIn("多资产投资组合管理", jobs[0].jd_text)
 
     def test_rgf_adapter_excludes_location_links(self):
         from radar.sources.registry import RgfAdapter
@@ -237,6 +329,29 @@ class SourceAdapterTest(unittest.TestCase):
 
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0].title, "Brand Manager")
+
+    def test_hays_uses_listing_text_when_encoded_slash_detail_404s(self):
+        from radar.sources.registry import HaysAdapter
+
+        listing = """
+        <a href="./jobs/pmspm%2Fmm-4324">
+          国内快速发展企业 PM/SPM/MM 面议 生命科学 销售与市场 上海 3-5年 本科
+          1、领域与产品管理：制定肿瘤产品布局与规划。
+          2、市场活动管理：负责市场活动的策划。
+        </a>
+        """
+
+        def fetch(url):
+            if url.endswith("/jobs"):
+                return listing
+            raise RuntimeError("404")
+
+        adapter = HaysAdapter(fetch=fetch)
+
+        jobs = adapter.crawl("2026-06-05")
+
+        self.assertEqual(jobs[0].title, "PM/SPM/MM")
+        self.assertIn("领域与产品管理", jobs[0].jd_text)
 
     def test_persolkelly_gllue_accepts_relative_job_urls(self):
         from radar.sources.registry import PersolkellyAdapter

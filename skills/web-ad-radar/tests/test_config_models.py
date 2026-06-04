@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from radar.config import build_run_config, resolve_companies
 from radar.env import load_env
@@ -30,10 +31,41 @@ class ConfigModelsTest(unittest.TestCase):
             self.assertEqual(cfg.date_from, "2026-06-01")
             self.assertEqual(cfg.date_to, "2026-06-04")
 
+    def test_build_run_config_defaults_to_yesterday_for_daily_crawl(self):
+        class FakeDate:
+            @classmethod
+            def today(cls):
+                from datetime import date
+
+                return date(2026, 6, 5)
+
+        with tempfile.TemporaryDirectory() as tmp, patch("radar.config.date", FakeDate):
+            cfg = build_run_config(
+                workspace=Path(tmp),
+                env_path=Path(".env"),
+                output_dir=Path("reports"),
+                data_dir=Path("data"),
+                companies=None,
+                crawl_only=True,
+                date_from=None,
+                date_to=None,
+            )
+
+            self.assertEqual(cfg.date_from, "2026-06-04")
+            self.assertEqual(cfg.date_to, "2026-06-04")
+
     def test_resolve_companies_accepts_aliases_and_rejects_unknown(self):
-        self.assertEqual(resolve_companies("rw,randstad"), ["robert-walters", "randstad"])
+        self.assertEqual(resolve_companies("roberthalf,randstad"), ["robert-half", "randstad"])
         with self.assertRaisesRegex(ValueError, "Unknown competitor"):
             resolve_companies("not-a-source")
+
+    def test_removed_sources_are_not_in_default_scope(self):
+        self.assertNotIn("robert-walters", resolve_companies(None))
+        self.assertNotIn("persolkelly", resolve_companies(None))
+        with self.assertRaisesRegex(ValueError, "Unknown competitor"):
+            resolve_companies("robert-walters")
+        with self.assertRaisesRegex(ValueError, "Unknown competitor"):
+            resolve_companies("persolkelly")
 
     def test_load_env_reads_values_without_comments_or_quotes(self):
         with tempfile.TemporaryDirectory() as tmp:

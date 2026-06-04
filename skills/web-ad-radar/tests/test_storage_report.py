@@ -62,7 +62,9 @@ class StorageReportTest(unittest.TestCase):
             url="https://example.com/job-1",
             location="Shanghai",
             jd_text="German chemical company in Shanghai seeking finance leadership.",
+            published_at="2026-06-03",
             first_seen_at="2026-06-04",
+            last_seen_at="2026-06-04",
             function_label="财务",
             industry_label="化工",
             label_confidence="high",
@@ -88,8 +90,8 @@ class StorageReportTest(unittest.TestCase):
 
         self.assertIn("# 职位广告雷达报告 - 2026-06-04", markdown)
         self.assertIn("## 执行摘要", markdown)
-        self.assertIn("| 发布方 | 职位名称 | JD | 职能标签 | 行业标签 | 标签置信度 | 地点 | 日期 | URL | 雇主猜测 | 置信度 |", markdown)
-        self.assertIn("| Randstad China | Finance Director | German chemical company in Shanghai seeking finance leadership. | 财务 | 化工 | high | Shanghai | 2026-06-04 | https://example.com/job-1 | BASF | medium |", markdown)
+        self.assertIn("| 发布方 | 职位名称 | JD | 职能标签 | 行业标签 | 标签置信度 | 地点 | 发布日期 | 抓取日期 | URL | 雇主猜测 | 置信度 |", markdown)
+        self.assertIn("| Randstad China | Finance Director | German chemical company in Shanghai seeking finance leadership. | 财务 | 化工 | high | Shanghai | 2026-06-03 | 2026-06-04 | https://example.com/job-1 | BASF | medium |", markdown)
         self.assertIn("### Finance Director", markdown)
         self.assertIn("German chemical company", markdown)
         self.assertIn("Several German chemical companies remain plausible", markdown)

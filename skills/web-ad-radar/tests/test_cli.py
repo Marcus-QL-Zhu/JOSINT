@@ -31,7 +31,7 @@ class CliTest(unittest.TestCase):
             self.assertTrue(report.exists())
             text = report.read_text(encoding="utf-8")
             self.assertIn("Sample Finance Director", text)
-            self.assertIn("| Randstad | Sample Finance Director | German chemical company in Shanghai seeking finance leadership. | 财务 | 化工 | high | Shanghai | 2026-06-04 | https://example.com/randstad/sample-finance-director |  |  |", text)
+            self.assertIn("| Randstad | Sample Finance Director | German chemical company in Shanghai seeking finance leadership. | 财务 | 化工 | high | Shanghai |  | 2026-06-04 | https://example.com/randstad/sample-finance-director |  |  |", text)
             self.assertTrue((workspace / "data" / "jobs.sqlite").exists())
 
     def test_cli_rejects_unknown_company(self):

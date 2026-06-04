@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
         jobs = _sample_jobs(cfg.companies, cfg.date_to)
         source_errors: list[str] = []
     else:
-        result = crawl_sources(build_adapters(cfg.companies), run_date=cfg.date_to)
+        result = crawl_sources(build_adapters(cfg.companies), run_date=cfg.date_to, date_from=cfg.date_from, date_to=cfg.date_to)
         jobs = result.jobs
         source_errors = result.errors
 

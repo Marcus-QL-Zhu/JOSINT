@@ -34,18 +34,19 @@ def render_report(
             "",
             "## 职位列表",
             "",
-            "| 发布方 | 职位名称 | JD | 职能标签 | 行业标签 | 标签置信度 | 地点 | 日期 | URL | 雇主猜测 | 置信度 |",
-            "|---|---|---|---|---|---|---|---|---|---|---|",
+            "| 发布方 | 职位名称 | JD | 职能标签 | 行业标签 | 标签置信度 | 地点 | 发布日期 | 抓取日期 | URL | 雇主猜测 | 置信度 |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|",
         ]
     )
     for job in jobs:
         guess = guesses.get(job.id)
         employer = guess.guessed_employer if guess and guess.guessed_employer else ""
         confidence = guess.confidence if guess else ""
-        date_value = job.published_at or job.updated_at or job.first_seen_at or ""
+        published_value = job.published_at or job.updated_at or ""
+        crawled_value = job.last_seen_at or job.first_seen_at or ""
         jd_value = _table_cell(_truncate(job.jd_text or job.detail_text or "", 260))
         lines.append(
-            f"| {_table_cell(job.source_name)} | {_table_cell(job.title)} | {jd_value} | {_table_cell(job.function_label or '')} | {_table_cell(job.industry_label or '')} | {_table_cell(job.label_confidence or '')} | {_table_cell(job.location or '')} | {date_value} | {job.url} | {_table_cell(employer)} | {_table_cell(confidence)} |"
+            f"| {_table_cell(job.source_name)} | {_table_cell(job.title)} | {jd_value} | {_table_cell(job.function_label or '')} | {_table_cell(job.industry_label or '')} | {_table_cell(job.label_confidence or '')} | {_table_cell(job.location or '')} | {published_value} | {crawled_value} | {job.url} | {_table_cell(employer)} | {_table_cell(confidence)} |"
         )
     if guesses:
         lines.extend(["", "## 雇主猜测详情", ""])

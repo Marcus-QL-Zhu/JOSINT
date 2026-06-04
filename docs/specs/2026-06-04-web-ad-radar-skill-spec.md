@@ -1,6 +1,7 @@
 # Web Ad Radar Skill SPEC
 
 Date: 2026-06-04
+Updated: 2026-06-05 for OpenClaw daily deployment, pagination, and AI/robotics recruiter expansion.
 
 ## Goal
 
@@ -56,7 +57,7 @@ python scripts/run_radar.py --companies randstad --from 2026-06-01 --to 2026-06-
 
 Default behavior:
 
-- Use today's date in the local timezone.
+- Use yesterday's date in the Asia/Shanghai business timezone when no `--from` or `--to` is supplied. This is designed for a daily early-morning OpenClaw run that captures the previous complete calendar day.
 - Crawl all enabled competitors.
 - Analyze all newly discovered or updated jobs in scope.
 - Write one Markdown report.
@@ -71,9 +72,11 @@ Default behavior:
 
 Date-range behavior:
 
-- Include jobs whose publish date, update date, or first-seen date falls in the range.
-- If a site does not expose publish/update dates, use first-seen date from local storage.
-- If no prior local storage exists, treat all currently visible jobs as first seen on the crawl date and mark dates as inferred.
+- For sources that expose a reliable publication/update date on the list page or detail page, crawl paginated results and include only jobs whose `published_at` or `updated_at` falls in the requested inclusive date range.
+- Date-aware adapters should continue checking pages until they either exhaust pagination or see enough older dated pages to prove no additional in-range jobs remain.
+- For sources that do not expose reliable publication/update dates, do not pretend visible jobs were published on the crawl date. Instead, crawl a deterministic fallback sample, currently 30 jobs per source, by following pagination from the first page.
+- Hays is currently treated as a no-date source and should crawl the first 3 pages / 30 jobs by default.
+- `first_seen_at` and `last_seen_at` are crawler observation dates, not publication dates. Reports and structured exports must keep these separate from `published_at`.
 
 Company filter behavior:
 
@@ -86,22 +89,24 @@ Initial enabled sources:
 
 | Slug | Company | Primary job source |
 |---|---|---|
-| `robert-walters` | Robert Walters China | `https://www.robertwalters.cn/` job search |
 | `robert-half` | Robert Half China | `https://www.roberthalf.cn/cn/en/find-jobs` |
 | `morgan-philips` | Morgan Philips Mainland China | `https://jobs.morganphilips.cn/en-cn` |
 | `morgan-mckinley` | Morgan McKinley Mainland China | `https://www.morganmckinley.com.cn/en/jobs` |
 | `hays` | Hays China | `https://www.hays-china.cn/en/jobs/` |
 | `randstad` | Randstad China | `https://www.randstad.cn/en/jobs/` |
 | `rgf` | RGF Professional Recruitment China | `https://www.rgf-professional.com.cn/zh/jobs` |
-| `persolkelly` | PERSOLKELLY China | `https://www.persolkellycn.com/` job listings |
+| `imatch` | imatch talent | Official job board if publicly available |
+| `intellipro` | IntelliPro / 英特利普 | Official job board if publicly available |
+| `cgl` | CGL Consulting / 猎聘系 CGL | Official job board if publicly available |
+| `vip-hunter` | VIP-HUNTER | Official job board if publicly available |
+| `risfond` | 锐仕方达 / Risfond | Official job board if publicly available |
+| `bo-le` | Bó Lè Associates / 伯乐 | Official job board if publicly available |
 
-Candidate future sources, disabled until stable selectors are confirmed:
+Disabled or skipped sources:
 
-- `hudson`
-- `korn-ferry`
-- `adecco`
-- `manpower`
-- `antal`
+- `robert-walters`: currently returns HTTP 403 from the China jobs entry.
+- `persolkelly`: current feed includes non-job placeholder posts and needs separate cleanup.
+- Any new requested source that lacks an official public job board, requires login, is blocked by anti-crawl/verification, or has no stable job-detail URL may be skipped with a documented reason in `references/source-registry.md` and `最终实施报告.md`.
 
 Each source adapter should define:
 
@@ -110,6 +115,7 @@ Each source adapter should define:
 - pagination strategy
 - job detail URL extraction
 - date extraction strategy
+- no-date fallback target count, if reliable dates are unavailable
 - fields available on list pages
 - fields requiring detail-page fetch
 - rate limit and retry policy
