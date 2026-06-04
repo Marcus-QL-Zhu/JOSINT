@@ -24,6 +24,10 @@ class JobRecord:
     language: str | None = None
     list_excerpt: str | None = None
     detail_text: str | None = None
+    function_label: str | None = None
+    industry_label: str | None = None
+    label_confidence: str | None = None
+    label_evidence: list[str] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
     id: str = field(init=False)
 
@@ -66,4 +70,3 @@ class RunConfig:
     crawl_only: bool
     date_from: str
     date_to: str
-

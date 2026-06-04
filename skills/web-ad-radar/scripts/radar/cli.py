@@ -7,6 +7,7 @@ from pathlib import Path
 from .config import build_run_config
 from .env import load_env
 from .inference import analyze_jobs
+from .labeling import label_jobs
 from .llm_minimax import MiniMaxClient
 from .metaso import MetasoClient
 from .models import JobRecord
@@ -41,6 +42,8 @@ def main(argv: list[str] | None = None) -> int:
         source_errors = result.errors
 
     store = JobStore(cfg.data_dir / "jobs.sqlite")
+    label_client = None if args.label_local_only else _build_label_client(env)
+    label_jobs(jobs, minimax=label_client)
     for job in jobs:
         store.upsert_job(job)
 
@@ -81,7 +84,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--to", dest="date_to", default=None, help="Inclusive date to YYYY-MM-DD.")
     parser.add_argument("--offline-sample", action="store_true", help="Use deterministic sample jobs for local smoke tests.")
     parser.add_argument("--analysis-limit", type=int, default=None, help="Analyze only the first N crawled jobs; useful for smoke tests and batches.")
+    parser.add_argument("--label-local-only", action="store_true", help="Skip MiniMax Layer 4 label fallback and use local labels only.")
     return parser
+
+
+def _build_label_client(env: dict[str, str]) -> MiniMaxClient | None:
+    key = env.get("MINIMAX_API_KEY")
+    if not key:
+        return None
+    return MiniMaxClient(
+        api_key=key,
+        base_url=env.get("MINIMAX_TEXT_BASE_URL", "https://api.minimaxi.com/v1/chat/completions"),
+        model=env.get("MINIMAX_TEXT_MODEL", "MiniMax-M2.7-highspeed"),
+    )
 
 
 def _build_reasoning_client(env: dict[str, str]) -> MiniMaxClient:

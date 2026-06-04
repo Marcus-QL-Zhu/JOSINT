@@ -34,8 +34,8 @@ def render_report(
             "",
             "## 职位列表",
             "",
-            "| 发布方 | 职位名称 | 地点 | 日期 | URL | 雇主猜测 | 置信度 |",
-            "|---|---|---|---|---|---|---|",
+            "| 发布方 | 职位名称 | 职能标签 | 行业标签 | 标签置信度 | 地点 | 日期 | URL | 雇主猜测 | 置信度 |",
+            "|---|---|---|---|---|---|---|---|---|---|",
         ]
     )
     for job in jobs:
@@ -44,7 +44,7 @@ def render_report(
         confidence = guess.confidence if guess else ""
         date_value = job.published_at or job.updated_at or job.first_seen_at or ""
         lines.append(
-            f"| {job.source_name} | {job.title} | {job.location or ''} | {date_value} | {job.url} | {employer} | {confidence} |"
+            f"| {job.source_name} | {job.title} | {job.function_label or ''} | {job.industry_label or ''} | {job.label_confidence or ''} | {job.location or ''} | {date_value} | {job.url} | {employer} | {confidence} |"
         )
     if guesses:
         lines.extend(["", "## 雇主猜测详情", ""])

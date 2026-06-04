@@ -45,12 +45,15 @@ The runner writes:
 - `data/jobs.sqlite`
 
 The Markdown report is written in Chinese. It lists source, job title, location, date, URL, employer guess, confidence, evidence, and source errors.
+It also includes function labels, industry labels, and label confidence. Labels are restricted to the configured enum sets.
 
 ## APIs
 
 Read API keys from the workspace `.env`. Never print keys.
 
-Stage 1 extraction uses `MINIMAX_TEXT_MODEL`, defaulting to `MiniMax-M2.7-highspeed` where needed.
+Stage 1 extraction and Layer 4 job-label fallback use `MINIMAX_TEXT_MODEL`, defaulting to `MiniMax-M2.7-highspeed` where needed.
+The labeler first applies local rules. Only non-high-confidence jobs are sent to MiniMax, batched at up to 10 jobs per request.
+Use `--label-local-only` to skip MiniMax label fallback.
 
 Stage 2 employer inference uses:
 

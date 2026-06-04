@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from radar.cli import main
+from radar.cli import _build_label_client, main
 
 
 class CliTest(unittest.TestCase):
@@ -29,7 +29,9 @@ class CliTest(unittest.TestCase):
             report = workspace / "reports" / "web-ad-radar-2026-06-04.md"
             self.assertEqual(exit_code, 0)
             self.assertTrue(report.exists())
-            self.assertIn("Sample Finance Director", report.read_text(encoding="utf-8"))
+            text = report.read_text(encoding="utf-8")
+            self.assertIn("Sample Finance Director", text)
+            self.assertIn("| Randstad | Sample Finance Director | 财务 | 化工 | high | Shanghai | 2026-06-04 | https://example.com/randstad/sample-finance-director |  |  |", text)
             self.assertTrue((workspace / "data" / "jobs.sqlite").exists())
 
     def test_cli_rejects_unknown_company(self):
@@ -62,6 +64,12 @@ class CliTest(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertIn("- 爬取职位数: 2", report)
             self.assertIn("- 已分析职位数: 1", report)
+
+    def test_label_client_defaults_to_minimax_m27_highspeed(self):
+        client = _build_label_client({"MINIMAX_API_KEY": "x"})
+
+        self.assertEqual(client.model, "MiniMax-M2.7-highspeed")
+        self.assertEqual(client.base_url, "https://api.minimaxi.com/v1/chat/completions")
 
 
 if __name__ == "__main__":

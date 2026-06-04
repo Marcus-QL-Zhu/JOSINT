@@ -41,10 +41,29 @@ class JobStore:
                     language TEXT,
                     list_excerpt TEXT,
                     detail_text TEXT,
+                    function_label TEXT,
+                    industry_label TEXT,
+                    label_confidence TEXT,
+                    label_evidence_json TEXT,
                     raw_json TEXT NOT NULL
                 )
                 """
             )
+            conn.commit()
+        self._migrate_schema()
+
+    def _migrate_schema(self) -> None:
+        required = {
+            "function_label": "TEXT",
+            "industry_label": "TEXT",
+            "label_confidence": "TEXT",
+            "label_evidence_json": "TEXT",
+        }
+        with closing(self._connect()) as conn:
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+            for column, column_type in required.items():
+                if column not in existing:
+                    conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} {column_type}")
             conn.commit()
 
     def upsert_job(self, job: JobRecord) -> None:
@@ -56,8 +75,9 @@ class JobStore:
                 INSERT INTO jobs (
                     id, source_slug, source_name, title, url, canonical_url, location, industry,
                     function, salary, job_type, published_at, updated_at, first_seen_at,
-                    last_seen_at, language, list_excerpt, detail_text, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_seen_at, language, list_excerpt, detail_text, function_label,
+                    industry_label, label_confidence, label_evidence_json, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     source_name=excluded.source_name,
                     title=excluded.title,
@@ -75,6 +95,10 @@ class JobStore:
                     language=excluded.language,
                     list_excerpt=excluded.list_excerpt,
                     detail_text=excluded.detail_text,
+                    function_label=excluded.function_label,
+                    industry_label=excluded.industry_label,
+                    label_confidence=excluded.label_confidence,
+                    label_evidence_json=excluded.label_evidence_json,
                     raw_json=excluded.raw_json
                 """,
                 self._job_values(job, first_seen),
@@ -83,13 +107,21 @@ class JobStore:
 
     def get_job(self, job_id: str) -> JobRecord | None:
         with closing(self._connect()) as conn:
-            row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            row = conn.execute(f"SELECT {self._select_columns()} FROM jobs WHERE id = ?", (job_id,)).fetchone()
         return self._row_to_job(row) if row else None
 
     def list_jobs(self) -> list[JobRecord]:
         with closing(self._connect()) as conn:
-            rows = conn.execute("SELECT * FROM jobs ORDER BY source_slug, title").fetchall()
+            rows = conn.execute(f"SELECT {self._select_columns()} FROM jobs ORDER BY source_slug, title").fetchall()
         return [self._row_to_job(row) for row in rows]
+
+    def _select_columns(self) -> str:
+        return (
+            "id, source_slug, source_name, title, url, canonical_url, location, industry, "
+            "function, salary, job_type, published_at, updated_at, first_seen_at, "
+            "last_seen_at, language, list_excerpt, detail_text, function_label, "
+            "industry_label, label_confidence, label_evidence_json, raw_json"
+        )
 
     def _job_values(self, job: JobRecord, first_seen: str | None) -> tuple[Any, ...]:
         return (
@@ -111,6 +143,10 @@ class JobStore:
             job.language,
             job.list_excerpt,
             job.detail_text,
+            job.function_label,
+            job.industry_label,
+            job.label_confidence,
+            json.dumps(job.label_evidence, ensure_ascii=False),
             json.dumps(job.raw, ensure_ascii=False),
         )
 
@@ -133,5 +169,9 @@ class JobStore:
             language=row[15],
             list_excerpt=row[16],
             detail_text=row[17],
-            raw=json.loads(row[18] or "{}"),
+            function_label=row[18],
+            industry_label=row[19],
+            label_confidence=row[20],
+            label_evidence=json.loads(row[21] or "[]"),
+            raw=json.loads(row[22] or "{}"),
         )
