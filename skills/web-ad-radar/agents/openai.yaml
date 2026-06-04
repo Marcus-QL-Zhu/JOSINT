@@ -1,0 +1,4 @@
+interface:
+  display_name: "Web Ad Radar"
+  short_description: "Monitor competitor China job ads and infer hidden employers."
+  default_prompt: "Use $web-ad-radar to crawl competitor China job ads and generate an employer-guess report."

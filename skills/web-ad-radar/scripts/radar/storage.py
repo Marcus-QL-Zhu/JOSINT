@@ -1,0 +1,137 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+from contextlib import closing
+from pathlib import Path
+from typing import Any
+
+from .models import JobRecord
+
+
+class JobStore:
+    def __init__(self, path: Path):
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_schema()
+
+    def _connect(self):
+        return sqlite3.connect(self.path)
+
+    def _init_schema(self) -> None:
+        with closing(self._connect()) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS jobs (
+                    id TEXT PRIMARY KEY,
+                    source_slug TEXT NOT NULL,
+                    source_name TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    canonical_url TEXT NOT NULL,
+                    location TEXT,
+                    industry TEXT,
+                    function TEXT,
+                    salary TEXT,
+                    job_type TEXT,
+                    published_at TEXT,
+                    updated_at TEXT,
+                    first_seen_at TEXT,
+                    last_seen_at TEXT,
+                    language TEXT,
+                    list_excerpt TEXT,
+                    detail_text TEXT,
+                    raw_json TEXT NOT NULL
+                )
+                """
+            )
+            conn.commit()
+
+    def upsert_job(self, job: JobRecord) -> None:
+        existing = self.get_job(job.id)
+        first_seen = existing.first_seen_at if existing and existing.first_seen_at else job.first_seen_at
+        with closing(self._connect()) as conn:
+            conn.execute(
+                """
+                INSERT INTO jobs (
+                    id, source_slug, source_name, title, url, canonical_url, location, industry,
+                    function, salary, job_type, published_at, updated_at, first_seen_at,
+                    last_seen_at, language, list_excerpt, detail_text, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    source_name=excluded.source_name,
+                    title=excluded.title,
+                    url=excluded.url,
+                    canonical_url=excluded.canonical_url,
+                    location=excluded.location,
+                    industry=excluded.industry,
+                    function=excluded.function,
+                    salary=excluded.salary,
+                    job_type=excluded.job_type,
+                    published_at=excluded.published_at,
+                    updated_at=excluded.updated_at,
+                    first_seen_at=jobs.first_seen_at,
+                    last_seen_at=excluded.last_seen_at,
+                    language=excluded.language,
+                    list_excerpt=excluded.list_excerpt,
+                    detail_text=excluded.detail_text,
+                    raw_json=excluded.raw_json
+                """,
+                self._job_values(job, first_seen),
+            )
+            conn.commit()
+
+    def get_job(self, job_id: str) -> JobRecord | None:
+        with closing(self._connect()) as conn:
+            row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        return self._row_to_job(row) if row else None
+
+    def list_jobs(self) -> list[JobRecord]:
+        with closing(self._connect()) as conn:
+            rows = conn.execute("SELECT * FROM jobs ORDER BY source_slug, title").fetchall()
+        return [self._row_to_job(row) for row in rows]
+
+    def _job_values(self, job: JobRecord, first_seen: str | None) -> tuple[Any, ...]:
+        return (
+            job.id,
+            job.source_slug,
+            job.source_name,
+            job.title,
+            job.url,
+            job.canonical_url,
+            job.location,
+            job.industry,
+            job.function,
+            job.salary,
+            job.job_type,
+            job.published_at,
+            job.updated_at,
+            first_seen,
+            job.last_seen_at,
+            job.language,
+            job.list_excerpt,
+            job.detail_text,
+            json.dumps(job.raw, ensure_ascii=False),
+        )
+
+    def _row_to_job(self, row: tuple[Any, ...]) -> JobRecord:
+        return JobRecord(
+            source_slug=row[1],
+            source_name=row[2],
+            title=row[3],
+            url=row[4],
+            canonical_url=row[5],
+            location=row[6],
+            industry=row[7],
+            function=row[8],
+            salary=row[9],
+            job_type=row[10],
+            published_at=row[11],
+            updated_at=row[12],
+            first_seen_at=row[13],
+            last_seen_at=row[14],
+            language=row[15],
+            list_excerpt=row[16],
+            detail_text=row[17],
+            raw=json.loads(row[18] or "{}"),
+        )
