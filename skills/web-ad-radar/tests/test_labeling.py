@@ -78,6 +78,19 @@ class LabelingTest(unittest.TestCase):
 
         self.assertEqual(label.function_label, "IT")
 
+    def test_persolkelly_brand_does_not_trigger_vc_pe(self):
+        job = JobRecord(
+            "persolkelly",
+            "PERSOLKELLY China",
+            "persolkelly日本人就職",
+            "https://example.com/persol",
+            jd_text="职位描述 PERSOLKELLY日本人就職",
+        )
+
+        label = label_job(job)
+
+        self.assertIsNone(label.function_label)
+
     def test_recruitment_footer_does_not_force_professional_services_industry(self):
         job = JobRecord(
             "robert-half",
@@ -119,6 +132,19 @@ class LabelingTest(unittest.TestCase):
 
         self.assertEqual(label.function_label, "供应链")
         self.assertIsNone(label.industry_label)
+
+    def test_procurement_title_wins_over_rnd_mentions_in_jd(self):
+        job = JobRecord(
+            "persolkelly",
+            "PERSOLKELLY China",
+            "采购专员",
+            "https://example.com/procurement",
+            jd_text="作为集研发与制造业务于一体的企业，本岗位需统筹供应商管理、采购执行等全流程采购工作。",
+        )
+
+        label = label_job(job)
+
+        self.assertEqual(label.function_label, "供应链")
 
     def test_layer4_batches_low_confidence_jobs_with_at_most_ten_per_minimax_call(self):
         class FakeMiniMax:
@@ -191,6 +217,46 @@ class LabelingTest(unittest.TestCase):
         self.assertIsNone(job.function_label)
         self.assertIsNone(job.industry_label)
         self.assertEqual(job.label_confidence, "low")
+
+    def test_layer4_prompt_sends_title_and_jd_as_separate_fields(self):
+        class CapturingMiniMax:
+            def __init__(self):
+                self.payload = None
+
+            def chat(self, messages, **kwargs):
+                self.payload = json.loads(messages[0]["content"])
+                job = self.payload["jobs"][0]
+                return json.dumps(
+                    {
+                        "labels": [
+                            {
+                                "id": job["id"],
+                                "function_label": None,
+                                "industry_label": None,
+                                "confidence": "low",
+                                "evidence": [],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+
+        job = JobRecord(
+            "persolkelly",
+            "PERSOLKELLY China",
+            "Business Coordinator",
+            "https://example.com/buyer",
+            jd_text="负责跨部门项目协调、资料整理和业务流程跟进。公司介绍：某500强汽车零配件企业。",
+            detail_text="legacy detail text should not be preferred when jd_text exists",
+        )
+        minimax = CapturingMiniMax()
+
+        label_jobs([job], minimax=minimax)
+
+        sent = minimax.payload["jobs"][0]
+        self.assertEqual(sent["title"], "Business Coordinator")
+        self.assertIn("跨部门项目协调", sent["jd_text"])
+        self.assertNotIn("legacy detail text", sent["jd_text"])
 
 
 if __name__ == "__main__":

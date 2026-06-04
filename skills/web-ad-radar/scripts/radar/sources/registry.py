@@ -26,6 +26,7 @@ class MorganPhilipsAdapter(SourceAdapter):
     include_url_patterns = ("/en-cn/", "/zh-cn/")
     exclude_url_patterns = SourceAdapter.exclude_url_patterns + ("/jobs-in-", "/shortlist", "?")
     job_url_regex = r"/(?:en-cn|zh-cn)/[^/?#]+-\d+/?$"
+    detail_xpaths = ("/html/body/div[2]/div[1]/div[2]/div[2]/div[2]/div[1]/div/div/div/div/div",)
 
 
 class MorganMcKinleyAdapter(SourceAdapter):
@@ -70,6 +71,7 @@ class PersolkellyAdapter(SourceAdapter):
     include_url_patterns = ("/job/", "/jobs/", "/zh-hans/job/")
     exclude_url_patterns = SourceAdapter.exclude_url_patterns + ("/jobs?page=", "/zh-cn/jobs")
     job_url_regex = r"(?:^\.?/jobs/|/jobs/)[^?/#]+-\d+/?$"
+    prefer_title_from_url = True
 
 
 ADAPTERS: dict[str, type[SourceAdapter]] = {

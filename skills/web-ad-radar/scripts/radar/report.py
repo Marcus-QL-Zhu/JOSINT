@@ -34,8 +34,8 @@ def render_report(
             "",
             "## 职位列表",
             "",
-            "| 发布方 | 职位名称 | 职能标签 | 行业标签 | 标签置信度 | 地点 | 日期 | URL | 雇主猜测 | 置信度 |",
-            "|---|---|---|---|---|---|---|---|---|---|",
+            "| 发布方 | 职位名称 | JD | 职能标签 | 行业标签 | 标签置信度 | 地点 | 日期 | URL | 雇主猜测 | 置信度 |",
+            "|---|---|---|---|---|---|---|---|---|---|---|",
         ]
     )
     for job in jobs:
@@ -43,8 +43,9 @@ def render_report(
         employer = guess.guessed_employer if guess and guess.guessed_employer else ""
         confidence = guess.confidence if guess else ""
         date_value = job.published_at or job.updated_at or job.first_seen_at or ""
+        jd_value = _table_cell(_truncate(job.jd_text or job.detail_text or "", 260))
         lines.append(
-            f"| {job.source_name} | {job.title} | {job.function_label or ''} | {job.industry_label or ''} | {job.label_confidence or ''} | {job.location or ''} | {date_value} | {job.url} | {employer} | {confidence} |"
+            f"| {_table_cell(job.source_name)} | {_table_cell(job.title)} | {jd_value} | {_table_cell(job.function_label or '')} | {_table_cell(job.industry_label or '')} | {_table_cell(job.label_confidence or '')} | {_table_cell(job.location or '')} | {date_value} | {job.url} | {_table_cell(employer)} | {_table_cell(confidence)} |"
         )
     if guesses:
         lines.extend(["", "## 雇主猜测详情", ""])
@@ -81,3 +82,12 @@ def render_report(
 
 def _mode_label(mode: str) -> str:
     return {"crawl only": "仅爬取", "crawl + analysis": "爬取 + 雇主分析"}.get(mode, mode)
+
+
+def _truncate(value: str, limit: int) -> str:
+    value = " ".join(value.split())
+    return value if len(value) <= limit else value[: limit - 3] + "..."
+
+
+def _table_cell(value: str) -> str:
+    return value.replace("|", "\\|").replace("\n", " ").strip()

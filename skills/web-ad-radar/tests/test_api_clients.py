@@ -1,8 +1,11 @@
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from radar.llm_minimax import MiniMaxClient
 from radar.metaso import MetasoClient, MetasoError
+from radar.usage import ApiUsageLogger
 
 
 class FakeResponse:
@@ -38,6 +41,35 @@ class ApiClientTest(unittest.TestCase):
         self.assertEqual(calls[0]["json"]["model"], "MiniMax-M3")
         self.assertEqual(calls[0]["json"]["thinking"], {"type": "adaptive"})
         self.assertTrue(calls[0]["json"]["reasoning_split"])
+
+    def test_minimax_chat_writes_api_usage_log_without_secret(self):
+        def fake_post(url, headers, json, timeout):
+            return FakeResponse(body={"choices": [{"message": {"content": "{\"ok\": true}"}}]})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            usage_path = Path(tmp) / "api_usage.jsonl"
+            client = MiniMaxClient(
+                api_key="secret-key",
+                base_url="https://api.minimaxi.com/v1/chat/completions",
+                model="MiniMax-M2.7-highspeed",
+                post=fake_post,
+                usage_logger=ApiUsageLogger(usage_path),
+                stage="label",
+            )
+
+            client.chat(
+                [{"role": "user", "content": "ping"}],
+                usage_context={"job_ids": ["job-1", "job-2"], "batch_size": 2},
+            )
+
+            record = json.loads(usage_path.read_text(encoding="utf-8").strip())
+            self.assertEqual(record["provider"], "minimax")
+            self.assertEqual(record["stage"], "label")
+            self.assertEqual(record["model"], "MiniMax-M2.7-highspeed")
+            self.assertEqual(record["batch_size"], 2)
+            self.assertEqual(record["job_ids"], ["job-1", "job-2"])
+            self.assertTrue(record["success"])
+            self.assertNotIn("secret-key", usage_path.read_text(encoding="utf-8"))
 
     def test_metaso_search_rejects_body_level_errors(self):
         def fake_post(url, headers, json, timeout):

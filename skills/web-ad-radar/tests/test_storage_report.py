@@ -16,6 +16,8 @@ class StorageReportTest(unittest.TestCase):
                 source_name="Randstad China",
             title="Finance Director",
             url="https://example.com/job-1",
+            jd_text="German chemical company in Shanghai seeking finance leadership.",
+            raw_title="Finance Director - Shanghai",
             first_seen_at="2026-06-01",
             last_seen_at="2026-06-01",
             function_label="财务",
@@ -30,6 +32,8 @@ class StorageReportTest(unittest.TestCase):
                 source_name="Randstad China",
             title="Finance Director Updated",
             url="https://example.com/job-1",
+            jd_text="Updated JD with German chemical company context.",
+            raw_title="Finance Director Updated - Shanghai",
             first_seen_at="2026-06-04",
             last_seen_at="2026-06-04",
             function_label="财务",
@@ -42,6 +46,8 @@ class StorageReportTest(unittest.TestCase):
 
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0].title, "Finance Director Updated")
+            self.assertEqual(rows[0].jd_text, "Updated JD with German chemical company context.")
+            self.assertEqual(rows[0].raw_title, "Finance Director Updated - Shanghai")
             self.assertEqual(rows[0].first_seen_at, "2026-06-01")
             self.assertEqual(rows[0].last_seen_at, "2026-06-04")
             self.assertEqual(rows[0].function_label, "财务")
@@ -55,6 +61,7 @@ class StorageReportTest(unittest.TestCase):
             title="Finance Director",
             url="https://example.com/job-1",
             location="Shanghai",
+            jd_text="German chemical company in Shanghai seeking finance leadership.",
             first_seen_at="2026-06-04",
             function_label="财务",
             industry_label="化工",
@@ -81,8 +88,8 @@ class StorageReportTest(unittest.TestCase):
 
         self.assertIn("# 职位广告雷达报告 - 2026-06-04", markdown)
         self.assertIn("## 执行摘要", markdown)
-        self.assertIn("| 发布方 | 职位名称 | 职能标签 | 行业标签 | 标签置信度 | 地点 | 日期 | URL | 雇主猜测 | 置信度 |", markdown)
-        self.assertIn("| Randstad China | Finance Director | 财务 | 化工 | high | Shanghai | 2026-06-04 | https://example.com/job-1 | BASF | medium |", markdown)
+        self.assertIn("| 发布方 | 职位名称 | JD | 职能标签 | 行业标签 | 标签置信度 | 地点 | 日期 | URL | 雇主猜测 | 置信度 |", markdown)
+        self.assertIn("| Randstad China | Finance Director | German chemical company in Shanghai seeking finance leadership. | 财务 | 化工 | high | Shanghai | 2026-06-04 | https://example.com/job-1 | BASF | medium |", markdown)
         self.assertIn("### Finance Director", markdown)
         self.assertIn("German chemical company", markdown)
         self.assertIn("Several German chemical companies remain plausible", markdown)
@@ -148,6 +155,7 @@ class StorageReportTest(unittest.TestCase):
             store.upsert_job(job)
 
             self.assertEqual(store.list_jobs()[0].function_label, "IT")
+            self.assertTrue(hasattr(store.list_jobs()[0], "jd_text"))
 
 
 if __name__ == "__main__":

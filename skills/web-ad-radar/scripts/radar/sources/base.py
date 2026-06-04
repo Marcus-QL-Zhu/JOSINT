@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import html
+import json
 import re
+from html.parser import HTMLParser
 from dataclasses import dataclass, field
 from typing import Callable
 from urllib import request
-from urllib.parse import urljoin
+from urllib.parse import unquote, urljoin
 
 from ..models import JobRecord
 
@@ -41,6 +43,8 @@ class SourceAdapter:
     exclude_url_patterns: tuple[str, ...] = ("#", "javascript:", "mailto:")
     job_url_regex: str | None = None
     max_jobs = 60
+    prefer_title_from_url = False
+    detail_xpaths: tuple[str, ...] = ()
 
     def __init__(self, fetch: Callable[[str], str] | None = None):
         self.fetch = fetch or default_fetch
@@ -55,6 +59,7 @@ class SourceAdapter:
         for href, text, context in self._iter_links(html_text):
             if not self._looks_like_job_url(href):
                 continue
+            raw_title = self._clean_text(text)
             title = self._clean_title(text, href)
             if not title or len(title) < 2:
                 continue
@@ -63,7 +68,7 @@ class SourceAdapter:
                 continue
             seen.add(url)
             published_at = self._extract_date(context)
-            detail_text = self._fetch_detail_text(url)
+            jd_text = self._fetch_detail_text(url)
             jobs.append(
                 JobRecord(
                     source_slug=self.slug,
@@ -75,8 +80,10 @@ class SourceAdapter:
                     first_seen_at=run_date,
                     last_seen_at=run_date,
                     list_excerpt=self._clean_text(context)[:500],
-                    detail_text=detail_text,
-                    raw={"source_start_url": self.start_url},
+                    detail_text=jd_text,
+                    jd_text=jd_text,
+                    raw_title=raw_title or title,
+                    raw={"source_start_url": self.start_url, "raw_title": raw_title},
                 )
             )
             if len(jobs) >= self.max_jobs:
@@ -125,17 +132,20 @@ class SourceAdapter:
         return None
 
     def _strip_tags(self, value: str) -> str:
-        return re.sub(r"<[^>]+>", " ", value)
+        cleaned = re.sub(r"<(script|style|noscript|svg|head)\b[^>]*>.*?</\1>", " ", value, flags=re.IGNORECASE | re.DOTALL)
+        return re.sub(r"<[^>]+>", " ", cleaned)
 
     def _clean_text(self, value: str) -> str:
         return re.sub(r"\s+", " ", html.unescape(self._strip_tags(value))).strip()
 
     def _clean_title(self, value: str, href: str) -> str:
         title = self._clean_text(value)
+        url_title = self._title_from_url(href)
+        if self.prefer_title_from_url and url_title:
+            return url_title
         if self._looks_mojibake(title):
-            fallback = self._title_from_url(href)
-            if fallback:
-                return fallback
+            if url_title:
+                return url_title
         return title
 
     def _fetch_detail_text(self, url: str) -> str | None:
@@ -143,18 +153,56 @@ class SourceAdapter:
             detail_html = self.fetch(url)
         except Exception:
             return None
-        text = self._clean_text(detail_html)
+        text = self._clean_detail_text(detail_html)
         return text[:8000] if text else None
+
+    def _clean_detail_text(self, html_text: str) -> str:
+        candidates = [self._clean_text(value) for value in self._extract_detail_candidates(html_text)]
+        candidates.append(self._clean_text(html_text))
+        scored = [(self._score_detail_candidate(self._trim_detail_text(candidate)), self._trim_detail_text(candidate)) for candidate in candidates if candidate]
+        if not scored:
+            return ""
+        return max(scored, key=lambda item: item[0])[1]
+
+    def _extract_detail_candidates(self, html_text: str) -> list[str]:
+        candidates: list[str] = []
+        candidates.extend(_extract_json_ld_job_descriptions(html_text))
+        for xpath in self.detail_xpaths:
+            value = _extract_xpath_html(html_text, xpath)
+            if value:
+                candidates.append(value)
+        return candidates
+
+    def _trim_detail_text(self, text: str) -> str:
+        for marker in ("职位描述", "岗位职责", "任职要求", "职位名称", "关于我们", "你将会做什么", "Job description", "Job Description", "Responsibilities", "Role description", "Requirements"):
+            index = text.find(marker)
+            if index >= 0:
+                text = text[index:]
+                break
+        for marker in ("立即投递 分享", "邀请好友", "隐私条款", "Powered by", "Privacy Policy", "CONTACT US", "services Talent Acquisition"):
+            index = text.find(marker)
+            if index >= 0:
+                text = text[:index]
+        return text.strip()
+
+    def _score_detail_candidate(self, text: str) -> tuple[int, int]:
+        anchors = ("职位描述", "岗位职责", "任职要求", "职位名称", "关于我们", "你将会做什么", "Job description", "Job Description", "Responsibilities", "Role description", "Requirements")
+        noise = ("CONTACT US", "Talent Acquisition", "Toggle navigation", "window.dataLayer", "self.__next_s")
+        return (
+            sum(20 for anchor in anchors if anchor in text) - sum(15 for marker in noise if marker in text),
+            -len(text),
+        )
 
     def _looks_mojibake(self, value: str) -> bool:
         markers = ("�", "Ã", "Â", "æ", "å", "ç", "娴", "璐", "閿", "涓", "鍛", "缁", "鐞", "姹")
         return any(marker in value for marker in markers)
 
     def _title_from_url(self, href: str) -> str | None:
-        path = href.split("?", 1)[0].strip("/")
+        path = unquote(href.split("?", 1)[0]).strip("/")
         slug = path.rsplit("/", 1)[-1]
         if slug.isdigit() and "/" in path:
             slug = path.rsplit("/", 2)[-2]
+        slug = re.sub(r"-\d+$", "", slug, flags=re.IGNORECASE)
         slug = re.sub(r"_(?:20)?\d{4,}.*$", "", slug, flags=re.IGNORECASE)
         slug = re.sub(r"_[a-z-]+$", "", slug, flags=re.IGNORECASE)
         slug = slug.replace("-", " ").replace("_", " ")
@@ -170,3 +218,114 @@ def crawl_sources(adapters: list[SourceAdapter], *, run_date: str) -> CrawlResul
         except Exception as exc:  # keep one broken site from stopping the whole radar
             result.errors.append(f"{adapter.slug}: {exc}")
     return result
+
+
+@dataclass
+class _HtmlNode:
+    tag: str
+    attrs: dict[str, str] = field(default_factory=dict)
+    children: list["_HtmlNode"] = field(default_factory=list)
+    text: list[str] = field(default_factory=list)
+
+
+class _TreeBuilder(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.root = _HtmlNode("_root")
+        self.stack = [self.root]
+
+    def handle_starttag(self, tag: str, attrs):
+        node = _HtmlNode(tag.lower(), dict(attrs))
+        self.stack[-1].children.append(node)
+        self.stack.append(node)
+
+    def handle_endtag(self, tag: str):
+        lowered = tag.lower()
+        while len(self.stack) > 1:
+            node = self.stack.pop()
+            if node.tag == lowered:
+                break
+
+    def handle_data(self, data: str):
+        if data.strip():
+            self.stack[-1].text.append(data)
+
+
+def _extract_xpath_html(html_text: str, xpath: str) -> str | None:
+    builder = _TreeBuilder()
+    builder.feed(html_text)
+    node: _HtmlNode | None = builder.root
+    for tag, index in _parse_simple_xpath(xpath):
+        matches = [child for child in (node.children if node else []) if child.tag == tag]
+        if len(matches) < index:
+            return None
+        node = matches[index - 1]
+    return _node_text(node) if node else None
+
+
+def _parse_simple_xpath(xpath: str) -> list[tuple[str, int]]:
+    result: list[tuple[str, int]] = []
+    for part in xpath.strip("/").split("/"):
+        match = re.fullmatch(r"([a-zA-Z0-9]+)(?:\[(\d+)\])?", part)
+        if not match:
+            return []
+        result.append((match.group(1).lower(), int(match.group(2) or "1")))
+    return result
+
+
+def _node_text(node: _HtmlNode) -> str:
+    parts = list(node.text)
+    for child in node.children:
+        parts.append(_node_text(child))
+    return " ".join(part.strip() for part in parts if part.strip())
+
+
+def _extract_json_ld_job_descriptions(html_text: str) -> list[str]:
+    descriptions: list[str] = []
+    script_re = re.compile(
+        r"<script\b[^>]*type\s*=\s*[\"']application/ld\+json[\"'][^>]*>(?P<body>.*?)</script>",
+        re.IGNORECASE | re.DOTALL,
+    )
+    for match in script_re.finditer(html_text):
+        body = match.group("body").strip()
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            fallback = _extract_json_ld_description_field(body)
+            if fallback:
+                descriptions.append(_html_fragment_to_text(fallback))
+            continue
+        for item in _iter_json_ld_items(payload):
+            if item.get("@type") == "JobPosting" and item.get("description"):
+                descriptions.append(_html_fragment_to_text(str(item["description"])))
+    return descriptions
+
+
+def _extract_json_ld_description_field(body: str) -> str | None:
+    match = re.search(r'"description"\s*:\s*"(?P<description>.*?)"\s*,\s*"datePosted"', body, re.DOTALL)
+    if not match:
+        return None
+    value = match.group("description")
+    try:
+        return json.loads(f'"{value}"')
+    except json.JSONDecodeError:
+        return value.replace(r"\/", "/").replace(r"\"", '"')
+
+
+def _iter_json_ld_items(payload):
+    if isinstance(payload, list):
+        for item in payload:
+            yield from _iter_json_ld_items(item)
+    elif isinstance(payload, dict):
+        graph = payload.get("@graph")
+        if isinstance(graph, list):
+            for item in graph:
+                yield from _iter_json_ld_items(item)
+        yield payload
+
+
+def _html_fragment_to_text(value: str) -> str:
+    value = re.sub(r"<br\s*/?>", "\n", value, flags=re.IGNORECASE)
+    value = re.sub(r"</p\s*>", "\n", value, flags=re.IGNORECASE)
+    value = re.sub(r"<[^>]+>", " ", value)
+    return re.sub(r"\s+", " ", html.unescape(value)).strip()

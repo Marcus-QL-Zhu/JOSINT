@@ -26,7 +26,7 @@ CLUSTER_TOKENS = (
 
 
 def detect_proprietary_terms(job: JobRecord) -> list[dict[str, str]]:
-    text = f"{job.title}\n{job.list_excerpt or ''}\n{job.detail_text or ''}"
+    text = f"{job.title}\n{job.list_excerpt or ''}\n{job.jd_text or job.detail_text or ''}"
     evidence = []
     for term, interpretation in PROPRIETARY_TERMS.items():
         if re.search(rf"\b{re.escape(term)}\b", text, re.IGNORECASE):
@@ -36,7 +36,7 @@ def detect_proprietary_terms(job: JobRecord) -> list[dict[str, str]]:
 
 def cluster_related_jobs(jobs: list[JobRecord]) -> dict[str, list[JobRecord]]:
     result: dict[str, list[JobRecord]] = defaultdict(list)
-    lowered = {job.id: f"{job.title} {job.location or ''} {job.list_excerpt or ''} {job.detail_text or ''}".lower() for job in jobs}
+    lowered = {job.id: f"{job.title} {job.location or ''} {job.list_excerpt or ''} {job.jd_text or job.detail_text or ''}".lower() for job in jobs}
     for job in jobs:
         for other in jobs:
             if job.id == other.id or job.source_slug != other.source_slug:
@@ -159,7 +159,7 @@ def _candidate_jd_query(employer: str, job: JobRecord) -> str:
 
 def _build_search_queries(job: JobRecord, evidence: list[dict[str, Any]]) -> list[str]:
     queries = [f"{item['text']} employer company clue" for item in evidence[:3]]
-    text = f"{job.title} {job.location or ''} {job.list_excerpt or ''} {job.detail_text or ''}".lower()
+    text = f"{job.title} {job.location or ''} {job.list_excerpt or ''} {job.jd_text or job.detail_text or ''}".lower()
     location = job.location or ""
     if "german chemical company" in text:
         queries.append(f"German chemical company {location} employer".strip())
@@ -188,10 +188,12 @@ def _call_reasoner(
             "title": job.title,
             "location": job.location,
             "url": job.url,
-            "text": job.detail_text or job.list_excerpt or "",
+            "jd_text": job.jd_text or job.detail_text or "",
+            "list_excerpt": job.list_excerpt or "",
+            "company_description": job.company_description or "",
         },
         "related_jobs": [
-            {"title": related.title, "location": related.location, "text": related.detail_text or related.list_excerpt or ""}
+            {"title": related.title, "location": related.location, "jd_text": related.jd_text or related.detail_text or "", "list_excerpt": related.list_excerpt or ""}
             for related in related_jobs[:5]
         ],
         "evidence": evidence,
@@ -208,6 +210,7 @@ def _call_reasoner(
         [{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
         thinking_type="adaptive",
         reasoning_split=True,
+        usage_context={"job_ids": [job.id], "batch_size": 1},
     )
     return _parse_json_object(content)
 

@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from radar.cli import _build_label_client, main
+from radar.cli import _build_label_client, _build_reasoning_client, main
 
 
 class CliTest(unittest.TestCase):
@@ -31,7 +31,7 @@ class CliTest(unittest.TestCase):
             self.assertTrue(report.exists())
             text = report.read_text(encoding="utf-8")
             self.assertIn("Sample Finance Director", text)
-            self.assertIn("| Randstad | Sample Finance Director | 财务 | 化工 | high | Shanghai | 2026-06-04 | https://example.com/randstad/sample-finance-director |  |  |", text)
+            self.assertIn("| Randstad | Sample Finance Director | German chemical company in Shanghai seeking finance leadership. | 财务 | 化工 | high | Shanghai | 2026-06-04 | https://example.com/randstad/sample-finance-director |  |  |", text)
             self.assertTrue((workspace / "data" / "jobs.sqlite").exists())
 
     def test_cli_rejects_unknown_company(self):
@@ -70,6 +70,12 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(client.model, "MiniMax-M2.7-highspeed")
         self.assertEqual(client.base_url, "https://api.minimaxi.com/v1/chat/completions")
+
+    def test_reasoning_client_uses_longer_default_timeout_for_m3(self):
+        client = _build_reasoning_client({"MINIMAX_API_KEY": "x"})
+
+        self.assertEqual(client.model, "MiniMax-M3")
+        self.assertGreaterEqual(client.timeout, 180)
 
 
 if __name__ == "__main__":

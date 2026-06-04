@@ -24,6 +24,9 @@ class JobRecord:
     language: str | None = None
     list_excerpt: str | None = None
     detail_text: str | None = None
+    jd_text: str | None = None
+    company_description: str | None = None
+    raw_title: str | None = None
     function_label: str | None = None
     industry_label: str | None = None
     label_confidence: str | None = None
@@ -34,6 +37,12 @@ class JobRecord:
     def __post_init__(self) -> None:
         if not self.canonical_url:
             self.canonical_url = self.url
+        if self.jd_text is None:
+            self.jd_text = self.detail_text
+        if self.detail_text is None:
+            self.detail_text = self.jd_text
+        if self.raw_title is None:
+            self.raw_title = self.title
         digest = hashlib.sha256(f"{self.source_slug}|{self.canonical_url}".encode("utf-8")).hexdigest()[:12]
         self.id = f"{self.source_slug}:{digest}"
 

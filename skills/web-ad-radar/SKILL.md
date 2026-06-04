@@ -46,6 +46,8 @@ The runner writes:
 
 The Markdown report is written in Chinese. It lists source, job title, location, date, URL, employer guess, confidence, evidence, and source errors.
 It also includes function labels, industry labels, and label confidence. Labels are restricted to the configured enum sets.
+Job title and JD are stored and reported separately. `title` should be a clean role name; `jd_text` contains responsibilities, requirements, company introductions, and other JD content.
+API usage is appended to `data/api_usage.jsonl` with provider, stage, model, success, latency, batch size, and job ids. API keys are never logged.
 
 ## APIs
 

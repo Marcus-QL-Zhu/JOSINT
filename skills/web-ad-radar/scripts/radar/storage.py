@@ -41,6 +41,9 @@ class JobStore:
                     language TEXT,
                     list_excerpt TEXT,
                     detail_text TEXT,
+                    jd_text TEXT,
+                    company_description TEXT,
+                    raw_title TEXT,
                     function_label TEXT,
                     industry_label TEXT,
                     label_confidence TEXT,
@@ -58,6 +61,9 @@ class JobStore:
             "industry_label": "TEXT",
             "label_confidence": "TEXT",
             "label_evidence_json": "TEXT",
+            "jd_text": "TEXT",
+            "company_description": "TEXT",
+            "raw_title": "TEXT",
         }
         with closing(self._connect()) as conn:
             existing = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
@@ -75,9 +81,10 @@ class JobStore:
                 INSERT INTO jobs (
                     id, source_slug, source_name, title, url, canonical_url, location, industry,
                     function, salary, job_type, published_at, updated_at, first_seen_at,
-                    last_seen_at, language, list_excerpt, detail_text, function_label,
-                    industry_label, label_confidence, label_evidence_json, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_seen_at, language, list_excerpt, detail_text, jd_text,
+                    company_description, raw_title, function_label, industry_label,
+                    label_confidence, label_evidence_json, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     source_name=excluded.source_name,
                     title=excluded.title,
@@ -95,6 +102,9 @@ class JobStore:
                     language=excluded.language,
                     list_excerpt=excluded.list_excerpt,
                     detail_text=excluded.detail_text,
+                    jd_text=excluded.jd_text,
+                    company_description=excluded.company_description,
+                    raw_title=excluded.raw_title,
                     function_label=excluded.function_label,
                     industry_label=excluded.industry_label,
                     label_confidence=excluded.label_confidence,
@@ -119,8 +129,9 @@ class JobStore:
         return (
             "id, source_slug, source_name, title, url, canonical_url, location, industry, "
             "function, salary, job_type, published_at, updated_at, first_seen_at, "
-            "last_seen_at, language, list_excerpt, detail_text, function_label, "
-            "industry_label, label_confidence, label_evidence_json, raw_json"
+            "last_seen_at, language, list_excerpt, detail_text, jd_text, "
+            "company_description, raw_title, function_label, industry_label, "
+            "label_confidence, label_evidence_json, raw_json"
         )
 
     def _job_values(self, job: JobRecord, first_seen: str | None) -> tuple[Any, ...]:
@@ -143,6 +154,9 @@ class JobStore:
             job.language,
             job.list_excerpt,
             job.detail_text,
+            job.jd_text,
+            job.company_description,
+            job.raw_title,
             job.function_label,
             job.industry_label,
             job.label_confidence,
@@ -169,9 +183,12 @@ class JobStore:
             language=row[15],
             list_excerpt=row[16],
             detail_text=row[17],
-            function_label=row[18],
-            industry_label=row[19],
-            label_confidence=row[20],
-            label_evidence=json.loads(row[21] or "[]"),
-            raw=json.loads(row[22] or "{}"),
+            jd_text=row[18] or row[17],
+            company_description=row[19],
+            raw_title=row[20] or row[3],
+            function_label=row[21],
+            industry_label=row[22],
+            label_confidence=row[23],
+            label_evidence=json.loads(row[24] or "[]"),
+            raw=json.loads(row[25] or "{}"),
         )

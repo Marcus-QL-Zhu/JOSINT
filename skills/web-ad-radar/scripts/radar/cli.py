@@ -14,6 +14,7 @@ from .models import JobRecord
 from .report import render_report
 from .sources import build_adapters, crawl_sources
 from .storage import JobStore
+from .usage import ApiUsageLogger
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -32,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
     env = load_env(cfg.env_path)
+    usage_logger = ApiUsageLogger(cfg.data_dir / "api_usage.jsonl")
 
     if args.offline_sample:
         jobs = _sample_jobs(cfg.companies, cfg.date_to)
@@ -42,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
         source_errors = result.errors
 
     store = JobStore(cfg.data_dir / "jobs.sqlite")
-    label_client = None if args.label_local_only else _build_label_client(env)
+    label_client = None if args.label_local_only else _build_label_client(env, usage_logger=usage_logger)
     label_jobs(jobs, minimax=label_client)
     for job in jobs:
         store.upsert_job(job)
@@ -52,8 +54,8 @@ def main(argv: list[str] | None = None) -> int:
         jobs_to_analyze = jobs[: args.analysis_limit] if args.analysis_limit else jobs
         guesses = analyze_jobs(
             jobs_to_analyze,
-            minimax=_build_reasoning_client(env),
-            metaso=_build_metaso_client(env),
+            minimax=_build_reasoning_client(env, usage_logger=usage_logger),
+            metaso=_build_metaso_client(env, usage_logger=usage_logger),
         )
 
     report = render_report(
@@ -88,7 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _build_label_client(env: dict[str, str]) -> MiniMaxClient | None:
+def _build_label_client(env: dict[str, str], usage_logger: ApiUsageLogger | None = None) -> MiniMaxClient | None:
     key = env.get("MINIMAX_API_KEY")
     if not key:
         return None
@@ -96,22 +98,27 @@ def _build_label_client(env: dict[str, str]) -> MiniMaxClient | None:
         api_key=key,
         base_url=env.get("MINIMAX_TEXT_BASE_URL", "https://api.minimaxi.com/v1/chat/completions"),
         model=env.get("MINIMAX_TEXT_MODEL", "MiniMax-M2.7-highspeed"),
+        usage_logger=usage_logger,
+        stage="label",
     )
 
 
-def _build_reasoning_client(env: dict[str, str]) -> MiniMaxClient:
+def _build_reasoning_client(env: dict[str, str], usage_logger: ApiUsageLogger | None = None) -> MiniMaxClient:
     return MiniMaxClient(
         api_key=env["MINIMAX_API_KEY"],
         base_url=env.get("MINIMAX_REASONING_BASE_URL", "https://api.minimaxi.com/v1/chat/completions"),
         model=env.get("MINIMAX_REASONING_MODEL", "MiniMax-M3"),
+        timeout=int(env.get("MINIMAX_REASONING_TIMEOUT", "180")),
+        usage_logger=usage_logger,
+        stage="employer_inference",
     )
 
 
-def _build_metaso_client(env: dict[str, str]) -> MetasoClient | None:
+def _build_metaso_client(env: dict[str, str], usage_logger: ApiUsageLogger | None = None) -> MetasoClient | None:
     key = env.get("METASO_API_KEY")
     if not key:
         return None
-    return MetasoClient(api_key=key, base_url=env.get("METASO_BASE_URL", "https://metaso.cn"), model=env.get("METASO_MODEL", "fast"))
+    return MetasoClient(api_key=key, base_url=env.get("METASO_BASE_URL", "https://metaso.cn"), model=env.get("METASO_MODEL", "fast"), usage_logger=usage_logger, stage="metaso_search")
 
 
 def _sample_jobs(companies: list[str], run_date: str) -> list[JobRecord]:
@@ -126,7 +133,7 @@ def _sample_jobs(companies: list[str], run_date: str) -> list[JobRecord]:
                 location="Shanghai",
                 first_seen_at=run_date,
                 last_seen_at=run_date,
-                detail_text="German chemical company in Shanghai seeking finance leadership.",
+                jd_text="German chemical company in Shanghai seeking finance leadership.",
             )
         )
     return jobs

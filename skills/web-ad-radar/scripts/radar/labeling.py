@@ -50,7 +50,7 @@ MAX_LLM_LABEL_BATCH_SIZE = 10
 
 
 FUNCTION_RULES: list[tuple[str, tuple[str, ...]]] = [
-    ("VC/PE", ("vc", "pe", "private equity", "venture capital", "portfolio", "投后", "投资经理", "基金")),
+    ("VC/PE", ("vc/pe", "private equity", "venture capital", "portfolio", "投后", "投资经理", "基金")),
     ("保险", ("insurance", "actuarial", "underwriting", "claim", "reinsurance", "保险", "精算", "核保", "理赔", "银保")),
     ("banking", ("banking", "bank", "kyc", "credit", "trader", "investment banking", "银行", "券商", "资管", "信贷", "交易员")),
     ("销售", ("sales", "business development", "bd", "key account", "account manager", "commercial director", "销售", "客户开发", "商务拓展")),
@@ -60,9 +60,9 @@ FUNCTION_RULES: list[tuple[str, tuple[str, ...]]] = [
     ("人事", ("hr", "human resources", "talent acquisition", "recruiter", "c&b", "hrbp", "人事", "招聘", "薪酬", "组织发展")),
     ("法务", ("legal", "compliance", "risk", "ip ", "intellectual property", "法务", "合规", "知识产权", "风控")),
     ("行政", ("admin", "office manager", "secretary", "assistant", "facility", "行政", "秘书", "助理", "前台")),
+    ("供应链", ("supply chain", "procurement", "logistics", "sourcing", "buyer", "planning", "供应链", "采购", "物流", "计划", "寻源")),
     ("研发", ("r&d", "research", "engineer", "developer", "scientist", "algorithm", "embedded", "software engineer", "研发", "工程师", "算法", "嵌入式", "产品研发", "运动控制")),
     ("生产", ("plant", "manufacturing", "production", "quality", "ehs", "process", "生产", "制造", "质量", "工艺", "厂长", "设备")),
-    ("供应链", ("supply chain", "procurement", "logistics", "sourcing", "buyer", "planning", "供应链", "采购", "物流", "计划", "寻源")),
 ]
 
 INDUSTRY_RULES: list[tuple[str, tuple[str, ...]]] = [
@@ -137,7 +137,7 @@ def _primary_job_text(job: JobRecord) -> str:
 
 
 def _detail_job_text(job: JobRecord) -> str:
-    text = (job.detail_text or "").lower()
+    text = (job.jd_text or job.detail_text or "").lower()
     if "optanonwrapper" in text or text.lstrip().startswith(("function ", "var ")):
         return ""
     return text
@@ -214,6 +214,7 @@ def _call_llm_labeler(jobs: list[JobRecord], minimax: Any) -> dict[str, dict[str
         [{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
         response_format={"type": "json_object"},
         max_completion_tokens=3000,
+        usage_context={"job_ids": [job.id for job in jobs], "batch_size": len(jobs)},
     )
     parsed = _parse_json_object(content)
     labels = parsed.get("labels", [])
@@ -236,7 +237,8 @@ def _job_payload(job: JobRecord) -> dict[str, str | None]:
         "structured_industry": job.industry,
         "structured_function": job.function,
         "list_excerpt": job.list_excerpt,
-        "detail_text": _truncate(_detail_job_text(job), 1600),
+        "jd_text": _truncate(_detail_job_text(job), 1600),
+        "company_description": _truncate(job.company_description or "", 800),
     }
 
 
