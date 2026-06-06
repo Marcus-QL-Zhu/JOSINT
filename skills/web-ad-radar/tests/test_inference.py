@@ -1,5 +1,8 @@
 ﻿import json
+import os
+import tempfile
 import unittest
+from pathlib import Path
 
 from radar.inference import analyze_jobs, cluster_related_jobs, detect_proprietary_terms
 from radar.models import JobRecord
@@ -73,7 +76,16 @@ class InferenceTest(unittest.TestCase):
         minimax = FakeMiniMax(json.dumps({"guessed_employer": "Honeywell", "confidence": "high", "confidence_score": 0.91, "reasoning_summary": "HOS clue."}))
 
         metaso = FakeMetaso()
-        guesses = analyze_jobs([job], minimax=minimax, metaso=metaso)
+        with tempfile.TemporaryDirectory() as tmp:
+            old = os.environ.get("JOSINT_INFERENCE_DEBUG_DIR")
+            os.environ["JOSINT_INFERENCE_DEBUG_DIR"] = tmp
+            try:
+                guesses = analyze_jobs([job], minimax=minimax, metaso=metaso)
+            finally:
+                if old is None:
+                    os.environ.pop("JOSINT_INFERENCE_DEBUG_DIR", None)
+                else:
+                    os.environ["JOSINT_INFERENCE_DEBUG_DIR"] = old
 
         self.assertEqual(guesses[job.id].guessed_employer, "Honeywell")
         self.assertEqual(guesses[job.id].confidence, "high")
@@ -152,5 +164,76 @@ class InferenceTest(unittest.TestCase):
         self.assertIn("Inference API failed", guesses[job.id].review_flags[0])
 
 
+
+    def test_invalid_initial_json_is_repaired_with_m3(self):
+        job = JobRecord(
+            "morgan-philips",
+            "Morgan Philips Mainland China",
+            "Commercial Lead",
+            "https://e/1",
+            detail_text="AI solutions commercial leadership role.",
+        )
+        minimax = SequenceMiniMax(
+            [
+                '{"guessed_employer": "StepFun" "confidence": "high"}',
+                json.dumps({
+                    "guessed_employer": "StepFun",
+                    "confidence": "high",
+                    "confidence_score": 0.82,
+                    "reasoning_summary": "修复后的 JSON。",
+                    "review_flags": [],
+                }, ensure_ascii=False),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old = os.environ.get("JOSINT_INFERENCE_DEBUG_DIR")
+            os.environ["JOSINT_INFERENCE_DEBUG_DIR"] = tmp
+            try:
+                guesses = analyze_jobs([job], minimax=minimax, metaso=None)
+                debug_files = list(Path(tmp).glob("*.json"))
+            finally:
+                if old is None:
+                    os.environ.pop("JOSINT_INFERENCE_DEBUG_DIR", None)
+                else:
+                    os.environ["JOSINT_INFERENCE_DEBUG_DIR"] = old
+
+        self.assertEqual(guesses[job.id].guessed_employer, "StepFun")
+        self.assertEqual(len(minimax.calls), 2)
+        repair_prompt = minimax.calls[1]["messages"][0]["content"]
+        self.assertIn("raw_response", repair_prompt)
+        self.assertIn("不要重新推理", repair_prompt)
+        self.assertTrue(debug_files)
+
+    def test_invalid_verification_json_preserves_initial_candidate(self):
+        job = JobRecord(
+            "morgan-philips",
+            "Morgan Philips Mainland China",
+            "Commercial Lead",
+            "https://e/1",
+            location="Shanghai",
+            detail_text="AI solutions commercial leadership role.",
+        )
+        minimax = SequenceMiniMax(
+            [
+                json.dumps({
+                    "guessed_employer": "StepFun",
+                    "confidence": "medium",
+                    "confidence_score": 0.7,
+                    "reasoning_summary": "第一轮候选。",
+                    "review_flags": [],
+                }, ensure_ascii=False),
+                '{"guessed_employer": "StepFun" "confidence": "high"}',
+                "still not json",
+            ]
+        )
+        metaso = FakeMetaso()
+
+        guesses = analyze_jobs([job], minimax=minimax, metaso=metaso)
+
+        self.assertEqual(guesses[job.id].guessed_employer, "StepFun")
+        self.assertEqual(guesses[job.id].confidence, "medium")
+        self.assertTrue(any(item["type"] == "candidate_jd_check" for item in guesses[job.id].evidence))
+        self.assertTrue(any("candidate verification" in flag.lower() for flag in guesses[job.id].review_flags))
 if __name__ == "__main__":
     unittest.main()

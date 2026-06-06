@@ -2,9 +2,12 @@
 
 import json
 import logging
+import os
 import re
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from .models import EmployerGuess, JobRecord
@@ -214,17 +217,26 @@ def _analyze_one_job(
             except Exception as exc:
                 evidence.append({"type": "search_error", "text": str(exc)})
     try:
-        payload = _call_reasoner(job, clusters.get(job.id, []), evidence, external_sources, minimax)
-        payload = _verify_candidate_with_public_jds(
-            job=job,
-            payload=payload,
-            related_jobs=clusters.get(job.id, []),
-            evidence=evidence,
-            external_sources=external_sources,
-            search_queries=search_queries,
-            minimax=minimax,
-            metaso=metaso,
+        payload = _call_reasoner(
+            job, clusters.get(job.id, []), evidence, external_sources, minimax,
+            stage="initial",
         )
+        try:
+            payload = _verify_candidate_with_public_jds(
+                job=job,
+                payload=payload,
+                related_jobs=clusters.get(job.id, []),
+                evidence=evidence,
+                external_sources=external_sources,
+                search_queries=search_queries,
+                minimax=minimax,
+                metaso=metaso,
+            )
+        except Exception as exc:  # noqa: BLE001
+            evidence.append({"type": "candidate_verification_error", "text": str(exc)})
+            flags = list(payload.get("review_flags") or [])
+            flags.append(f"candidate verification failed: {exc}")
+            payload["review_flags"] = flags
         return EmployerGuess(
             job_id=job.id,
             guessed_employer=payload.get("guessed_employer"),
@@ -288,7 +300,10 @@ def _verify_candidate_with_public_jds(
                 "summary": page.get("summary", ""),
             }
         )
-    return _call_reasoner(job, related_jobs, evidence, external_sources, minimax)
+    return _call_reasoner(
+        job, related_jobs, evidence, external_sources, minimax,
+        stage="candidate_verification",
+    )
 
 
 def _candidate_jd_query(employer: str, job: JobRecord) -> str:
@@ -322,8 +337,44 @@ def _call_reasoner(
     evidence: list[dict[str, Any]],
     external_sources: list[dict[str, Any]],
     minimax: Any,
+    *,
+    stage: str,
 ) -> dict[str, Any]:
-    prompt = {
+    prompt = _build_reasoner_prompt(job, related_jobs, evidence, external_sources)
+    content = minimax.chat(
+        [{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
+        thinking_type="adaptive",
+        reasoning_split=True,
+        usage_context={"job_ids": [job.id], "batch_size": 1},
+    )
+    try:
+        return _normalize_reasoner_payload(_parse_json_object(content))
+    except json.JSONDecodeError as exc:
+        _write_inference_debug(
+            job=job,
+            stage=stage,
+            prompt_payload=prompt,
+            raw_response=content,
+            parse_error=exc,
+        )
+        repaired = _repair_reasoner_json(
+            job=job,
+            stage=stage,
+            prompt_payload=prompt,
+            raw_response=content,
+            parse_error=exc,
+            minimax=minimax,
+        )
+        return _normalize_reasoner_payload(repaired)
+
+
+def _build_reasoner_prompt(
+    job: JobRecord,
+    related_jobs: list[JobRecord],
+    evidence: list[dict[str, Any]],
+    external_sources: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
         "task": "推断这条猎头职位广告背后的隐藏雇主公司。只返回严格 JSON，不要返回 Markdown。",
         "language_requirement": "所有自然语言字段必须使用简体中文；JSON key 保持英文。reasoning_summary 和 review_flags 必须是中文。",
         "job": {
@@ -348,20 +399,142 @@ def _call_reasoner(
             "review_flags": ["中文，列出仍需人工复核的疑点"],
         },
     }
+
+
+def _repair_reasoner_json(
+    *,
+    job: JobRecord,
+    stage: str,
+    prompt_payload: dict[str, Any],
+    raw_response: str,
+    parse_error: json.JSONDecodeError,
+    minimax: Any,
+) -> dict[str, Any]:
+    repair_prompt = {
+        "task": "修复上一轮 MiniMax-M3 返回的不合法 JSON。",
+        "instruction": (
+            "不要重新推理，不要改变事实，不要增加新证据。"
+            "优先保留 raw_response 中已有判断，只把它修复为符合 schema 的严格 JSON。"
+            "如果 raw_response 完全无法修复，则基于 original_prompt_payload 输出同 schema 的 JSON。"
+            "只返回 JSON，不要 Markdown，不要解释。"
+        ),
+        "stage": stage,
+        "parse_error": str(parse_error),
+        "raw_response": raw_response,
+        "original_prompt_payload": prompt_payload,
+        "schema": prompt_payload["schema"],
+    }
     content = minimax.chat(
-        [{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
+        [{"role": "user", "content": json.dumps(repair_prompt, ensure_ascii=False)}],
         thinking_type="adaptive",
         reasoning_split=True,
-        usage_context={"job_ids": [job.id], "batch_size": 1},
+        usage_context={"job_ids": [job.id], "batch_size": 1, "repair": True, "stage": stage},
     )
-    return _parse_json_object(content)
+    try:
+        return _parse_json_object(content)
+    except json.JSONDecodeError as repair_error:
+        _write_inference_debug(
+            job=job,
+            stage=f"{stage}_repair_failed",
+            prompt_payload=repair_prompt,
+            raw_response=content,
+            parse_error=repair_error,
+        )
+        raise ValueError(f"JSON repair failed: {repair_error}; original parse error: {parse_error}") from repair_error
 
 
 def _parse_json_object(content: str) -> dict[str, Any]:
+    content = _strip_json_fence(content.strip())
     try:
         return json.loads(content)
     except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", content, re.DOTALL)
-        if not match:
+        candidate = _extract_balanced_json_object(content)
+        if candidate is None:
             raise
-        return json.loads(match.group(0))
+        candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
+        return json.loads(candidate)
+
+
+def _strip_json_fence(content: str) -> str:
+    match = re.fullmatch(r"```(?:json)?\s*(?P<body>.*?)\s*```", content, re.DOTALL | re.IGNORECASE)
+    return match.group("body").strip() if match else content
+
+
+def _extract_balanced_json_object(content: str) -> str | None:
+    start = content.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for idx in range(start, len(content)):
+        ch = content[idx]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return content[start:idx + 1]
+    return None
+
+
+def _normalize_reasoner_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    confidence = normalized.get("confidence") or "low"
+    if confidence not in {"high", "medium", "low"}:
+        confidence = "low"
+    normalized["confidence"] = confidence
+    try:
+        score = float(normalized.get("confidence_score") or 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
+    normalized["confidence_score"] = max(0.0, min(1.0, score))
+    flags = normalized.get("review_flags") or []
+    if isinstance(flags, str):
+        flags = [flags]
+    elif not isinstance(flags, list):
+        flags = [str(flags)]
+    normalized["review_flags"] = [str(flag) for flag in flags]
+    normalized["reasoning_summary"] = str(normalized.get("reasoning_summary") or "")
+    if "guessed_employer" not in normalized:
+        normalized["guessed_employer"] = None
+    return normalized
+
+
+def _write_inference_debug(
+    *,
+    job: JobRecord,
+    stage: str,
+    prompt_payload: dict[str, Any],
+    raw_response: str,
+    parse_error: Exception,
+) -> None:
+    debug_dir = Path(os.environ.get("JOSINT_INFERENCE_DEBUG_DIR", "runtime/debug/inference"))
+    try:
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        safe_job_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", job.id)[:80]
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        payload = {
+            "timestamp": timestamp,
+            "job_id": job.id,
+            "title": job.title,
+            "url": job.url,
+            "stage": stage,
+            "parse_error": str(parse_error),
+            "raw_response": raw_response,
+            "prompt_payload": prompt_payload,
+        }
+        path = debug_dir / f"{timestamp}-{safe_job_id}-{stage}.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed to write inference debug artifact for job %s: %s", job.id, exc)
