@@ -66,7 +66,8 @@ def main(argv: list[str] | None = None) -> int:
         guesses=guesses,
         source_errors=source_errors,
     )
-    output_path = cfg.output_dir / f"web-ad-radar-{cfg.date_to}.md"
+    report_prefix = env.get("JOSINT_REPORT_PREFIX", "josint").strip() or "josint"
+    output_path = cfg.output_dir / f"{report_prefix}-{cfg.date_to}.md"
     output_path.write_text(report, encoding="utf-8")
     print(f"Wrote report: {output_path}")
     if source_errors:
@@ -75,12 +76,12 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Crawl competitor China job ads and infer hidden employers.")
+    parser = argparse.ArgumentParser(description="Crawl public recruiter job ads and infer hidden employers.")
     parser.add_argument("--workspace", default=".", help="Runtime workspace. Defaults to current directory.")
     parser.add_argument("--env", default=".env", help="Env file path relative to workspace unless absolute.")
     parser.add_argument("--output-dir", default="reports", help="Report output directory relative to workspace unless absolute.")
     parser.add_argument("--data-dir", default="data", help="Data directory relative to workspace unless absolute.")
-    parser.add_argument("--companies", default=None, help="Comma-separated competitor slugs or aliases.")
+    parser.add_argument("--companies", default=None, help="Comma-separated source slugs or aliases.")
     parser.add_argument("--crawl-only", action="store_true", help="Skip employer inference.")
     parser.add_argument("--from", dest="date_from", default=None, help="Inclusive date from YYYY-MM-DD.")
     parser.add_argument("--to", dest="date_to", default=None, help="Inclusive date to YYYY-MM-DD.")

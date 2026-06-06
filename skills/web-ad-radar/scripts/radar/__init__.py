@@ -1,2 +1,1 @@
-"""Web Ad Radar runtime package."""
-
+"""JOSINT runtime package."""

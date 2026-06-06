@@ -1,9 +1,9 @@
 ---
-name: web-ad-radar
-description: Crawl competitor recruitment-agency job advertisements in Mainland China and generate Markdown reports with job titles, URLs, and likely hidden-employer guesses. Use when asked to monitor Michael Page competitors, run daily job-ad radar, crawl Robert Half/Morgan Philips/Morgan McKinley/Hays/Randstad/RGF/IntelliPro/Risfond China jobs, or infer the end client behind recruiter job ads.
+name: josint
+description: Crawl public recruitment-agency job advertisements, label jobs, and generate structured intelligence outputs with likely hidden-employer guesses. Use when asked to run JOSINT, monitor recruiter job boards, crawl China job ads, sync results to Feishu Bitable, or infer the end client behind recruiter postings.
 ---
 
-# Web Ad Radar
+# JOSINT - the open-source job intelligence system
 
 ## Quick Start
 
@@ -42,7 +42,7 @@ The skill's own scripts and references are relative to this skill directory. Run
 
 The runner writes:
 
-- `reports/web-ad-radar-YYYY-MM-DD.md`
+- `reports/josint-YYYY-MM-DD.md`
 - `data/jobs.sqlite`
 
 The Markdown report is written in Chinese. It lists source, job title, JD, location, publish date, crawl date, URL, employer guess, confidence, evidence, and source errors.
@@ -50,6 +50,8 @@ It also includes function labels, industry labels, and label confidence. Labels 
 Job title and JD are stored and reported separately. `title` should be a clean role name; `jd_text` contains responsibilities, requirements, company introductions, and other JD content.
 For date-aware sources, only jobs in the requested date range are included. For sources without reliable publish/update dates, the crawler follows pagination until it has collected the fallback sample size, currently 30 jobs per source.
 API usage is appended to `data/api_usage.jsonl` with provider, stage, model, success, latency, batch size, and job ids. API keys are never logged.
+
+For OpenClaw/server deployments, `scripts/radar_cron.py` can crawl, sync to Feishu Bitable, run subset employer analysis, and send an optional Feishu notification. It uses the same relative `--workspace`, `--env`, `--output-dir`, and `--data-dir` path model as the local Codex runner.
 
 ## APIs
 

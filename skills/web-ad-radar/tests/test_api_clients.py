@@ -27,7 +27,7 @@ class ApiClientTest(unittest.TestCase):
             return FakeResponse(body={"choices": [{"message": {"content": "{\"ok\": true}"}}]})
 
         client = MiniMaxClient(
-            api_key="secret-key",
+            api_key="test-api-key",
             base_url="https://api.minimaxi.com/v1/chat/completions",
             model="MiniMax-M3",
             post=fake_post,
@@ -37,7 +37,7 @@ class ApiClientTest(unittest.TestCase):
 
         self.assertEqual(content, "{\"ok\": true}")
         self.assertEqual(calls[0]["url"], "https://api.minimaxi.com/v1/chat/completions")
-        self.assertEqual(calls[0]["headers"]["Authorization"], "Bearer secret-key")
+        self.assertEqual(calls[0]["headers"]["Authorization"], "Bearer test-api-key")
         self.assertEqual(calls[0]["json"]["model"], "MiniMax-M3")
         self.assertEqual(calls[0]["json"]["thinking"], {"type": "adaptive"})
         self.assertTrue(calls[0]["json"]["reasoning_split"])
@@ -49,7 +49,7 @@ class ApiClientTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             usage_path = Path(tmp) / "api_usage.jsonl"
             client = MiniMaxClient(
-                api_key="secret-key",
+                api_key="test-api-key",
                 base_url="https://api.minimaxi.com/v1/chat/completions",
                 model="MiniMax-M2.7-highspeed",
                 post=fake_post,
@@ -69,13 +69,13 @@ class ApiClientTest(unittest.TestCase):
             self.assertEqual(record["batch_size"], 2)
             self.assertEqual(record["job_ids"], ["job-1", "job-2"])
             self.assertTrue(record["success"])
-            self.assertNotIn("secret-key", usage_path.read_text(encoding="utf-8"))
+            self.assertNotIn("test-api-key", usage_path.read_text(encoding="utf-8"))
 
     def test_metaso_search_rejects_body_level_errors(self):
         def fake_post(url, headers, json, timeout):
             return FakeResponse(body={"errCode": 1000, "errMsg": "bad params"})
 
-        client = MetasoClient(api_key="mk-secret", post=fake_post)
+        client = MetasoClient(api_key="test-metaso-key", post=fake_post)
 
         with self.assertRaisesRegex(MetasoError, "bad params"):
             client.search("OpenAI")
@@ -91,7 +91,7 @@ class ApiClientTest(unittest.TestCase):
                 return FakeResponse(body={"title": "Page", "markdown": "# Page"})
             return FakeResponse(body={"answer": "A", "sources": []})
 
-        client = MetasoClient(api_key="mk-secret", post=fake_post)
+        client = MetasoClient(api_key="test-metaso-key", post=fake_post)
 
         self.assertEqual(client.search("OpenAI")["total"], 1)
         self.assertEqual(client.read("https://example.com")["markdown"], "# Page")

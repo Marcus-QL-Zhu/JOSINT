@@ -1,6 +1,9 @@
 .env
 data/
+data-*/
 reports/
 reports-*/
+runtime/
 __pycache__/
 *.pyc
+_server_snapshot/

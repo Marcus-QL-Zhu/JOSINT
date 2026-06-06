@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import html
 import json
 import re
 from typing import Callable
 from urllib import parse, request
 
-from .base import SourceAdapter
+from .base import SourceAdapter, _quote_url
 from ..models import JobRecord
 
 
@@ -20,6 +21,32 @@ class RobertHalfAdapter(SourceAdapter):
     slug = "robert-half"
     name = "Robert Half China"
     start_url = "https://www.roberthalf.cn/cn/en/jobs"
+
+    def _fetch_detail_text(self, url: str) -> str | None:
+        # The Robert Half job-detail page renders JD inside a custom-element
+        # <rhcl-job-card> using <div slot="description" data-testid="job-details-description">.
+        # base.SourceAdapter._clean_detail_text cannot locate it (xpath parser
+        # only supports tag[index] selectors, not data-testid), so the whole
+        # page fallback leaks navigation noise ("Search jobs now Submit your
+        # resume..."). Extract the slot block directly and clean it.
+        try:
+            detail_html = self.fetch(_quote_url(url))
+        except Exception:
+            return None
+        match = re.search(
+            r'<div\s+slot="description"[^>]*data-testid="job-details-description"[^>]*>(?P<body>.*?)</div>',
+            detail_html,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if match:
+            candidate = html.unescape(match.group("body"))
+            candidate = re.sub(r"<br\s*/?>", "\n", candidate, flags=re.IGNORECASE)
+            candidate = re.sub(r"</p\s*>", "\n", candidate, flags=re.IGNORECASE)
+            candidate = re.sub(r"<[^>]+>", " ", candidate)
+            cleaned = re.sub(r"\s+", " ", candidate).strip()
+            if cleaned:
+                return cleaned[:8000]
+        return super()._fetch_detail_text(url)
     include_url_patterns = ("/cn/en/job/", "/jobs/")
     max_pages = 3
 

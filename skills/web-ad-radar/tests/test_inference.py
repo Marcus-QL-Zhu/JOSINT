@@ -1,4 +1,4 @@
-import json
+﻿import json
 import unittest
 
 from radar.inference import analyze_jobs, cluster_related_jobs, detect_proprietary_terms

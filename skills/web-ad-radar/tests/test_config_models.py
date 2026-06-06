@@ -72,7 +72,7 @@ class ConfigModelsTest(unittest.TestCase):
             env_file = Path(tmp) / ".env"
             env_file.write_text(
                 "# comment\n"
-                "MINIMAX_API_KEY='secret-value'\n"
+                "MINIMAX_API_KEY='test-value'\n"
                 "METASO_API_KEY=mk-test\n"
                 "EMPTY=\n",
                 encoding="utf-8",
@@ -80,7 +80,7 @@ class ConfigModelsTest(unittest.TestCase):
 
             values = load_env(env_file)
 
-            self.assertEqual(values["MINIMAX_API_KEY"], "secret-value")
+            self.assertEqual(values["MINIMAX_API_KEY"], "test-value")
             self.assertEqual(values["METASO_API_KEY"], "mk-test")
             self.assertEqual(values["EMPTY"], "")
 

@@ -26,7 +26,7 @@ class CliTest(unittest.TestCase):
                 ]
             )
 
-            report = workspace / "reports" / "web-ad-radar-2026-06-04.md"
+            report = workspace / "reports" / "josint-2026-06-04.md"
             self.assertEqual(exit_code, 0)
             self.assertTrue(report.exists())
             text = report.read_text(encoding="utf-8")
@@ -60,7 +60,7 @@ class CliTest(unittest.TestCase):
                 ]
             )
 
-            report = (workspace / "reports" / "web-ad-radar-2026-06-04.md").read_text(encoding="utf-8")
+            report = (workspace / "reports" / "josint-2026-06-04.md").read_text(encoding="utf-8")
             self.assertEqual(exit_code, 0)
             self.assertIn("- 爬取职位数: 2", report)
             self.assertIn("- 已分析职位数: 1", report)

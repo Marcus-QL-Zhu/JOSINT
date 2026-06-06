@@ -216,12 +216,23 @@ class SourceAdapter:
         return None
 
     def _clean_detail_text(self, html_text: str) -> str:
-        candidates = [self._clean_text(value) for value in self._extract_detail_candidates(html_text)]
-        candidates.append(self._clean_text(html_text))
-        scored = [(self._score_detail_candidate(self._trim_detail_text(candidate)), self._trim_detail_text(candidate)) for candidate in candidates if candidate]
-        if not scored:
+        # Prefer structured candidates (json-ld, xpath) over the whole-page
+        # fallback. The whole-page path runs through _trim_detail_text which
+        # can collapse to a few characters of navigation noise when no anchor
+        # marker (e.g. "Job description") is present, even if the structured
+        # candidate is a perfectly good JD with no anchor markers either.
+        structured = [self._clean_text(value) for value in self._extract_detail_candidates(html_text)]
+        structured = [c for c in structured if c]
+        if structured:
+            scored = [
+                (self._score_detail_candidate(self._trim_detail_text(candidate)), self._trim_detail_text(candidate))
+                for candidate in structured
+            ]
+            return max(scored, key=lambda item: item[0])[1]
+        page_cleaned = self._clean_text(html_text)
+        if not page_cleaned:
             return ""
-        return max(scored, key=lambda item: item[0])[1]
+        return self._trim_detail_text(page_cleaned)
 
     def _extract_detail_candidates(self, html_text: str) -> list[str]:
         candidates: list[str] = []
@@ -398,7 +409,12 @@ def _iter_json_ld_items(payload):
 
 
 def _html_fragment_to_text(value: str) -> str:
+    # Unescape HTML entities first; otherwise the tag-stripping regexes below
+    # cannot match the escaped form (e.g. "&lt;br&gt;") and the raw escaped
+    # tags leak into the output. This matters for JSON-LD description fields
+    # that arrive double-escaped when json.loads fallback is used.
+    value = html.unescape(value)
     value = re.sub(r"<br\s*/?>", "\n", value, flags=re.IGNORECASE)
     value = re.sub(r"</p\s*>", "\n", value, flags=re.IGNORECASE)
     value = re.sub(r"<[^>]+>", " ", value)
-    return re.sub(r"\s+", " ", html.unescape(value)).strip()
+    return re.sub(r"\s+", " ", value).strip()
