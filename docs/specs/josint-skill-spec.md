@@ -63,9 +63,28 @@ When Metaso is configured, JOSINT searches for evidence before asking MiniMax-M3
 
 1. Crawl each enabled source with per-source timeout.
 2. Sync local records to Feishu Bitable with URL and normalized URL-hash deduplication.
-3. Filter high-interest roles, currently robotics/AI/R&D oriented.
-4. Run MiniMax-M3 employer inference with optional Metaso evidence.
-5. Write employer guesses and confidence back to Feishu.
-6. Send an optional Feishu IM summary if `FEISHU_NOTIFY_OPEN_ID` is configured.
+3. Keep only rows that were newly created in Bitable during this sync run for downstream employer inference.
+4. Filter high-interest roles, currently robotics/AI/R&D oriented.
+5. Run MiniMax-M3 employer inference with optional Metaso evidence.
+6. Write employer guesses, confidence, and inference-process fields back to Feishu.
+7. Optionally append a separate analysis log row when `FEISHU_ANALYSIS_LOG_TABLE_ID` is configured.
+8. Send an optional Feishu IM summary if `FEISHU_NOTIFY_OPEN_ID` is configured.
+
+Re-seen or updated jobs still refresh `last_seen_date`, `last_seen_month`, `crawl_run_id`, and JD text in the main table, but they are not re-analyzed by the scheduled path. This keeps daily runs focused on net-new opportunities while preserving cross-day deduplication.
+
+Recommended Bitable month strategy:
+
+- Keep one canonical main table for all jobs so URL/hash deduplication can work across months.
+- Use `month` as the first-created month and build monthly views from it.
+- Use `last_seen_month` for recency views and operational checks.
+- Avoid physically splitting jobs into monthly tables unless a downstream system supplies a global dedup index.
 
 Feishu field names are stable in the sync layer so downstream OpenClaw customizations can map them predictably.
+
+Main table analysis fields:
+
+`employer_guess`, `confidence`, `analysis_status`, `analysis_run_id`, `analysis_model`, `analyzed_at`, `reasoning_summary`, `review_flags_json`, `evidence_json`, `external_sources_json`, `search_queries_json`, `cross_job_links_json`
+
+Optional analysis log table fields:
+
+`analysis_run_id`, `analysis_model`, `analyzed_at`, `job_id`, `url`, `url_hash`, `employer_guess`, `confidence`, `analysis_status`, `reasoning_summary`, `review_flags_json`, `external_sources_json`, `search_queries_json`, `cross_job_links_json`

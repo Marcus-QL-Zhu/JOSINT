@@ -13,6 +13,7 @@ It can run locally as a Codex skill or on a server/OpenClaw schedule. Runtime da
 - Uses MiniMax-M3 plus optional Metaso search to infer likely hidden employers.
 - Generates Chinese Markdown reports.
 - Optionally syncs results to Feishu Bitable and sends Feishu IM summaries.
+- In scheduled Feishu mode, only jobs newly created in Bitable are sent to employer inference; re-seen or updated jobs are deduplicated without re-analysis.
 
 ## Quick Start
 
@@ -36,6 +37,7 @@ Copy `skills/web-ad-radar/.env.example` to `.env` and fill only the integrations
 - MiniMax-M3 is used for hidden-employer reasoning.
 - Metaso is used for evidence search and candidate-employer verification.
 - Feishu variables are only required for Bitable/IM sync mode.
+- `FEISHU_ANALYSIS_LOG_TABLE_ID` is optional. When configured, each inference result is also appended to a separate analysis log table with reasoning, searches, evidence, and review flags.
 
 ## Outputs
 
@@ -43,6 +45,15 @@ Copy `skills/web-ad-radar/.env.example` to `.env` and fill only the integrations
 - `data/jobs.sqlite`
 - `data/api_usage.jsonl`
 - `data/bitable_state.json` when Feishu sync is enabled
+
+## Feishu Data Contract
+
+The main Bitable keeps one canonical row per job advertisement, deduplicated by URL and normalized `url_hash`.
+
+- `month` is set only when a row is first created and is intended for monthly views.
+- `last_seen_month` is refreshed whenever a row is seen again.
+- `analysis_*`, `reasoning_summary`, and `*_json` fields store the latest hidden-employer inference state.
+- A separate optional analysis log table can be enabled with `FEISHU_ANALYSIS_LOG_TABLE_ID` to preserve the inference trail for every run.
 
 ## Documentation
 

@@ -50,6 +50,7 @@ from radar.bitable.analyze import (
     HIGH_CONFIDENCE_THRESHOLD,
     analyze_subset,
     filter_subset,
+    write_analysis_logs_to_bitable,
     write_back_to_bitable,
 )
 from radar.storage import JobStore
@@ -146,6 +147,7 @@ def run_cron(
     app_secret = env.get("FEISHU_APP_SECRET", "")
     app_token = env.get("FEISHU_BITABLE_APP_TOKEN", "")
     table_id = env.get("FEISHU_BITABLE_TABLE_ID", "")
+    analysis_log_table_id = env.get("FEISHU_ANALYSIS_LOG_TABLE_ID", "")
     notify_open_id = env.get("FEISHU_NOTIFY_OPEN_ID", "")
 
     if not all([app_id, app_secret, app_token, table_id]):
@@ -174,11 +176,13 @@ def run_cron(
 
     sync_stats = syncer.sync_many(jobs_today, crawl_run_id=crawl_run_id)
     log.info("Sync done: %s", sync_stats.as_dict())
+    jobs_new_in_bitable = _jobs_new_in_bitable(jobs_today, sync_stats)
+    log.info("New jobs eligible for analysis: %d/%d seen today", len(jobs_new_in_bitable), len(jobs_today))
 
     # ---- 3. Subset analysis (v1 inference pipeline + optional Metaso) ----
     if skip_analyze:
         log.info("Step 3: skipping subset analysis (--skip-analyze)")
-        subset = filter_subset(jobs_today)
+        subset = filter_subset(jobs_new_in_bitable)
         log.info("Subset size: %d jobs (analysis skipped)", len(subset))
         # Persist success and exit; we do not run steps 4-5 because
         # the user explicitly asked to skip analysis.
@@ -193,7 +197,7 @@ def run_cron(
         return 0 if sync_stats.failed == 0 else 1
 
     log.info("Step 3: subset employer analysis (with_evidence=%s)", metaso_client is not None)
-    subset = filter_subset(jobs_today)
+    subset = filter_subset(jobs_new_in_bitable)
     log.info("Subset size: %d jobs", len(subset))
 
     analysis_results: list[AnalysisResult] = []
@@ -230,8 +234,23 @@ def run_cron(
             else:
                 pending_count += 1
 
-        written = write_back_to_bitable(client, analysis_results)
+        analysis_model = getattr(m3_client, "model", None) or env.get("MINIMAX_REASONING_MODEL", "MiniMax-M3")
+        written = write_back_to_bitable(
+            client,
+            analysis_results,
+            run_id=crawl_run_id,
+            model=analysis_model,
+        )
         log.info("Wrote %d/%d analysis results back to bitable", written, len(analysis_results))
+        if analysis_log_table_id:
+            log_client = BitableClient(app_id, app_secret, app_token, analysis_log_table_id)
+            log_written = write_analysis_logs_to_bitable(
+                log_client,
+                analysis_results,
+                run_id=crawl_run_id,
+                model=analysis_model,
+            )
+            log.info("Wrote %d/%d analysis log rows", log_written, len(analysis_results))
 
     # ---- 4. Trend aggregation (today only) ----
     industry_counts = Counter(
@@ -305,6 +324,14 @@ def _run_per_source_runner(workspace: Path) -> int:
     except subprocess.TimeoutExpired:
         log.error("per_source_runner timed out")
         return 2
+
+
+def _jobs_new_in_bitable(jobs: list[Any], sync_stats: Any) -> list[Any]:
+    """Return jobs that were newly created in Bitable during this sync run."""
+    new_ids = set(getattr(sync_stats, "new_job_ids", []) or [])
+    if not new_ids:
+        return []
+    return [job for job in jobs if getattr(job, "id", None) in new_ids]
 
 
 def _send_failure(env: dict[str, str], today: str, stage: str, error: str) -> None:

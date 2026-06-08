@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,7 +28,9 @@ from radar.state_io import (  # noqa: E402
     today_utc_iso,
     yesterday_utc_iso,
 )
-from radar.bitable.sync import _today_ms  # noqa: E402
+from radar.bitable.dedup import DedupResult, url_hash  # noqa: E402
+from radar.bitable.sync import BitableSyncer, _today_ms  # noqa: E402
+from radar.models import JobRecord  # noqa: E402
 
 
 class StateIoTest(unittest.TestCase):
@@ -148,6 +151,66 @@ class SaveStateIntegrationTest(unittest.TestCase):
             payload = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(payload.get("last_run_date"), "2026-06-05")
             self.assertEqual(payload.get("retry_count"), 1)
+
+
+class FakeBitableClient:
+    def __init__(self):
+        self.created: list[dict] = []
+        self.updated: list[tuple[str, dict]] = []
+
+    def create_record(self, fields: dict) -> str:
+        self.created.append(fields)
+        return f"rec-{len(self.created)}"
+
+    def update_record(self, record_id: str, fields: dict) -> None:
+        self.updated.append((record_id, fields))
+
+
+class FakeDeduper:
+    def __init__(self, actions: dict[str, DedupResult]):
+        self.actions = actions
+
+    def lookup(self, job_url: str) -> DedupResult:
+        return self.actions[job_url]
+
+
+class BitableSyncerTest(unittest.TestCase):
+    def test_sync_stats_tracks_new_job_ids_only(self):
+        new_job = JobRecord("morgan-philips", "Morgan Philips", "AI Role", "https://e/new", first_seen_at="2026-06-08", last_seen_at="2026-06-08")
+        old_job = JobRecord("morgan-philips", "Morgan Philips", "Old AI Role", "https://e/old", first_seen_at="2026-06-01", last_seen_at="2026-06-08")
+        client = FakeBitableClient()
+        with tempfile.TemporaryDirectory() as tmp:
+            syncer = BitableSyncer(
+                client,
+                FakeDeduper({
+                    new_job.url: DedupResult("new", None, None),
+                    old_job.url: DedupResult("update_url", "rec-old", "url"),
+                }),
+                Path(tmp) / "cache.json",
+            )
+            stats = syncer.sync_many([new_job, old_job], crawl_run_id="run-1")
+
+        self.assertEqual(stats.new, 1)
+        self.assertEqual(stats.updated, 1)
+        self.assertEqual(stats.new_job_ids, [new_job.id])
+        self.assertEqual(stats.action_by_job_id[old_job.id], "updated")
+
+    def test_job_fields_include_first_seen_month_for_monthly_views(self):
+        job = JobRecord(
+            "morgan-philips",
+            "Morgan Philips",
+            "AI Role",
+            "https://e/new",
+            first_seen_at="2026-06-08",
+            last_seen_at="2026-06-09",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            syncer = BitableSyncer(FakeBitableClient(), FakeDeduper({}), Path(tmp) / "cache.json")
+            fields = syncer._job_to_fields(job, is_new=True, crawl_run_id="run-1")
+
+        self.assertEqual(fields["month"], "2026-06")
+        self.assertEqual(fields["last_seen_month"], "2026-06")
+        self.assertEqual(fields["url_hash"], url_hash(job.url))
 
 
 if __name__ == "__main__":

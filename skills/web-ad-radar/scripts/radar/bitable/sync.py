@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -38,6 +38,9 @@ class SyncStats:
     updated: int = 0
     skipped: int = 0
     failed: int = 0
+    new_job_ids: list[str] = field(default_factory=list)
+    new_url_hashes: list[str] = field(default_factory=list)
+    action_by_job_id: dict[str, str] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -107,11 +110,13 @@ class BitableSyncer:
             "url": {"link": job.url, "text": job.title[:60] or job.url},
             "url_hash": url_hash(job.url),
             "last_seen_date": _iso_or_today_ms(job.last_seen_at, default=today_ms),
+            "last_seen_month": _job_month(job.last_seen_at) or _job_month(job.first_seen_at) or _current_month(),
             "crawl_run_id": crawl_run_id,
             "jd_text": jd,
         }
         if is_new:
             fields["first_seen_date"] = _iso_or_today_ms(job.first_seen_at, default=today_ms)
+            fields["month"] = _job_month(job.first_seen_at) or _job_month(job.last_seen_at) or _current_month()
         if job.industry_label:
             fields["industry"] = job.industry_label
         elif job.industry:
@@ -135,6 +140,8 @@ class BitableSyncer:
                 jd = (job.jd_text or job.detail_text or "") or ""
                 self.client.update_record(cached_id, {
                     "last_seen_date": _today_ms(),
+                    "last_seen_month": _job_month(job.last_seen_at) or _current_month(),
+                    "crawl_run_id": crawl_run_id,
                     "jd_text": jd[:4500],
                 })
                 return "updated"
@@ -164,6 +171,7 @@ class BitableSyncer:
         jd = (job.jd_text or job.detail_text or "") or ""
         self.client.update_record(result.record_id, {
             "last_seen_date": _today_ms(),
+            "last_seen_month": _job_month(job.last_seen_at) or _current_month(),
             "crawl_run_id": crawl_run_id,
             "jd_text": jd[:4500],
         })
@@ -178,8 +186,11 @@ class BitableSyncer:
             stats.scanned += 1
             try:
                 action = self.sync_one(job, crawl_run_id=crawl_run_id)
+                stats.action_by_job_id[job.id] = action
                 if action == "new":
                     stats.new += 1
+                    stats.new_job_ids.append(job.id)
+                    stats.new_url_hashes.append(url_hash(job.url))
                 elif action == "updated":
                     stats.updated += 1
                 else:
@@ -228,6 +239,19 @@ def _today_ms() -> int:
     import calendar as _cal
     today_utc = datetime.now(timezone.utc).date()
     return int(_cal.timegm(today_utc.timetuple())) * 1000
+
+
+def _job_month(value: str | int | None) -> str | None:
+    if value is None or value == "":
+        return None
+    s = str(value)
+    if len(s) >= 7 and s[4] in "-/" and s[7:8] in {"-", "/", ""}:
+        return s[:7].replace("/", "-")
+    return None
+
+
+def _current_month() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m")
 
 
 def _iso_or_today_ms(value: str | int | None, default: int) -> int:

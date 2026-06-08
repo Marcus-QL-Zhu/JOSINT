@@ -16,7 +16,9 @@ Confidence threshold follows the existing daily digest threshold: 0.7.
 from __future__ import annotations
 
 import logging
+import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from .client import BitableClient
@@ -127,7 +129,13 @@ def analyze_subset(
     return results
 
 
-def write_back_to_bitable(client: BitableClient, results: list[AnalysisResult]) -> int:
+def write_back_to_bitable(
+    client: BitableClient,
+    results: list[AnalysisResult],
+    *,
+    run_id: str = "",
+    model: str = "MiniMax-M3",
+) -> int:
     """Write employer_guess + confidence back to the Bitable.
 
     Uses the url_hash index in the Bitable to find the record_id.
@@ -161,8 +169,67 @@ def write_back_to_bitable(client: BitableClient, results: list[AnalysisResult]) 
             client.update_record(rid, {
                 "employer_guess": r.guessed_employer or "Unknown",
                 "confidence": r.confidence_score,
+                "analysis_status": "success" if r.guessed_employer else "no_guess",
+                "analysis_run_id": run_id,
+                "analysis_model": model,
+                "analyzed_at": _now_ms(),
+                "reasoning_summary": _truncate_text(r.reasoning),
+                "review_flags_json": _json_field(r.review_flags),
+                "evidence_json": _json_field({
+                    "external_sources": r.external_sources,
+                    "search_queries": r.search_queries,
+                    "cross_job_links": r.cross_job_links,
+                }),
+                "external_sources_json": _json_field(r.external_sources),
+                "search_queries_json": _json_field(r.search_queries),
+                "cross_job_links_json": _json_field(r.cross_job_links),
             })
             written += 1
         except Exception as e:  # noqa: BLE001
             log.error("Failed to write analysis for %s: %s", r.url, e)
     return written
+
+
+def write_analysis_logs_to_bitable(
+    client: BitableClient,
+    results: list[AnalysisResult],
+    *,
+    run_id: str = "",
+    model: str = "MiniMax-M3",
+) -> int:
+    """Append full-ish analysis process rows to an optional analysis log table."""
+    written = 0
+    for r in results:
+        try:
+            client.create_record({
+                "analysis_run_id": run_id,
+                "analysis_model": model,
+                "analyzed_at": _now_ms(),
+                "job_id": r.job_id,
+                "url": {"link": r.url, "text": r.job_id[:60] or r.url},
+                "url_hash": url_hash(r.url),
+                "employer_guess": r.guessed_employer or "Unknown",
+                "confidence": r.confidence_score,
+                "analysis_status": "success" if r.guessed_employer else "no_guess",
+                "reasoning_summary": _truncate_text(r.reasoning, limit=4500),
+                "review_flags_json": _json_field(r.review_flags),
+                "external_sources_json": _json_field(r.external_sources),
+                "search_queries_json": _json_field(r.search_queries),
+                "cross_job_links_json": _json_field(r.cross_job_links),
+            })
+            written += 1
+        except Exception as e:  # noqa: BLE001
+            log.error("Failed to write analysis log for %s: %s", r.url, e)
+    return written
+
+
+def _now_ms() -> int:
+    return int(datetime.now(timezone.utc).timestamp() * 1000)
+
+
+def _json_field(value: Any, *, limit: int = 4500) -> str:
+    return _truncate_text(json.dumps(value, ensure_ascii=False), limit=limit)
+
+
+def _truncate_text(value: str, *, limit: int = 4500) -> str:
+    return (value or "")[:limit]
