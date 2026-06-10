@@ -31,8 +31,15 @@ log = logging.getLogger(__name__)
 
 
 # Subset filter keywords for high-interest job intelligence workflows.
-SUBSET_INDUSTRIES = ["机器人", "AI", "artificial intelligence", "robotics", "robot"]
-SUBSET_FUNCTIONS = ["研发", "开发", "R&D", "research", "engineering", "engineer"]
+# OR conditions: robotics, AI, R&D, semiconductor, HR.
+SUBSET_INDUSTRIES = [
+    "机器人", "AI", "artificial intelligence", "robotics", "robot",
+    "半导体", "semiconductor", "chip", "wafer",
+]
+SUBSET_FUNCTIONS = [
+    "研发", "开发", "R&D", "research", "engineering", "engineer",
+    "人事", "HR", "human resources", "recruiter", "talent acquisition",
+]
 
 # Confidence threshold for "high confidence" in the daily digest
 HIGH_CONFIDENCE_THRESHOLD = 0.7

@@ -8,8 +8,9 @@ from pathlib import Path
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
-from radar.bitable.analyze import AnalysisResult, write_back_to_bitable  # noqa: E402
+from radar.bitable.analyze import AnalysisResult, filter_subset, write_back_to_bitable  # noqa: E402
 from radar.bitable.dedup import url_hash  # noqa: E402
+from radar.models import JobRecord  # noqa: E402
 
 
 class FakeBitableClient:
@@ -57,6 +58,19 @@ class BitableAnalyzeWriteBackTest(unittest.TestCase):
         self.assertEqual(json.loads(fields["review_flags_json"]), ["needs human review"])
         self.assertEqual(json.loads(fields["search_queries_json"]), ["ExampleAI job JD"])
         self.assertEqual(json.loads(fields["external_sources_json"])[0]["title"], "source")
+
+
+class BitableAnalyzeSubsetTest(unittest.TestCase):
+    def test_daily_subset_includes_semiconductor_and_hr_as_or_conditions(self):
+        jobs = [
+            JobRecord("src", "Src", "Semiconductor Sales", "https://e/semiconductor", industry_label="半导体", function_label="销售"),
+            JobRecord("src", "Src", "HRBP", "https://e/hr", industry_label="工业", function_label="人事"),
+            JobRecord("src", "Src", "Consumer Finance", "https://e/finance", industry_label="消费", function_label="财务"),
+        ]
+
+        result = filter_subset(jobs)
+
+        self.assertEqual([job.url for job in result], ["https://e/semiconductor", "https://e/hr"])
 
 
 if __name__ == "__main__":

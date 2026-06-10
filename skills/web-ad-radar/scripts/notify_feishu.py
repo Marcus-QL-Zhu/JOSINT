@@ -81,7 +81,7 @@ def format_daily_summary(
         f"- 本地库总数: **{total_local_jobs}**",
         failed_section,
         "",
-        "**子集分析**: 机器人/AI/研发相关职位",
+        "**子集分析**: 机器人/AI/研发/半导体/人事相关职位",
         f"- 命中子集: **{len(high_confidence) + low_confidence_count + pending_count}**",
         f"- 高置信度 (>=0.7): **{len(high_confidence)}**",
         f"- 低置信度: **{low_confidence_count}**",
