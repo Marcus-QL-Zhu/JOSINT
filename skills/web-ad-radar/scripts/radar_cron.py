@@ -133,11 +133,13 @@ def run_cron(
     else:
         log.info("Step 1: crawling 8 sources via per_source_runner")
         crawl_exit = _run_per_source_runner(workspace)
-    if crawl_exit == 2:
-        # catastrophic: data dir is missing or python failed
+    if crawl_exit != 0:
+        # Catastrophic: the crawl subprocess did not complete. Do not sync
+        # stale local DB rows and mark the run as successful.
         _send_failure(env, today, stage="crawl", error=f"per_source_runner exit={crawl_exit}")
         state["last_run_status"] = "failed"
         state["last_error"] = f"crawl exit {crawl_exit}"
+        state["last_run_finished_at"] = now_utc_iso()
         save_state(workspace, state)
         return 2
 
@@ -170,9 +172,6 @@ def run_cron(
     store = JobStore(workspace / "data" / "jobs.sqlite")
     all_jobs = store.list_jobs()
     jobs_today = [j for j in all_jobs if (j.last_seen_at or "").startswith(yesterday) or not j.last_seen_at]
-    if not jobs_today:
-        # Fall back to all local jobs if the date filter is too strict
-        jobs_today = all_jobs
 
     sync_stats = syncer.sync_many(jobs_today, crawl_run_id=crawl_run_id)
     log.info("Sync done: %s", sync_stats.as_dict())
@@ -308,7 +307,7 @@ def _run_per_source_runner(workspace: Path) -> int:
     """
     import subprocess
     cmd = [
-        "python3", str(workspace / "scripts" / "per_source_runner.py"),
+        sys.executable, str(workspace / "scripts" / "per_source_runner.py"),
         "--workspace", ".",
         "--timeout", "120",
         "--max-jobs", "30",
