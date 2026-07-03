@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from html.parser import HTMLParser
 from dataclasses import dataclass, field
 from typing import Callable
@@ -50,6 +51,7 @@ class SourceAdapter:
     date_aware = False
     prefer_title_from_url = False
     detail_xpaths: tuple[str, ...] = ()
+    detail_fetch_workers = 1
 
     def __init__(self, fetch: Callable[[str], str] | None = None):
         self.fetch = fetch or default_fetch
@@ -87,7 +89,7 @@ class SourceAdapter:
         return f"{self.start_url}{separator}page={page_number}"
 
     def extract_jobs(self, html_text: str, base_url: str, run_date: str, date_from: str | None = None, date_to: str | None = None) -> list[JobRecord]:
-        jobs: list[JobRecord] = []
+        candidates: list[tuple[str, str, str, str, str, str | None]] = []
         seen: set[str] = set()
         for href, text, context in self._iter_links(html_text):
             if not self._looks_like_job_url(href):
@@ -103,7 +105,14 @@ class SourceAdapter:
             published_at = self._extract_date(context)
             if self.date_aware and not self._date_in_range(published_at, date_from, date_to):
                 continue
-            jd_text = self._fetch_detail_text(url) or self._fallback_listing_detail(text, context)
+            candidates.append((url, title, raw_title, text, context, published_at))
+            if len(candidates) >= self.max_jobs:
+                break
+
+        detail_texts = self._fetch_detail_texts([candidate[0] for candidate in candidates])
+        jobs: list[JobRecord] = []
+        for index, (url, title, raw_title, link_text, context, published_at) in enumerate(candidates):
+            jd_text = detail_texts[index] or self._fallback_listing_detail(link_text, context)
             jobs.append(
                 JobRecord(
                     source_slug=self.slug,
@@ -121,9 +130,27 @@ class SourceAdapter:
                     raw={"source_start_url": self.start_url, "raw_title": raw_title},
                 )
             )
-            if len(jobs) >= self.max_jobs:
-                break
         return jobs
+
+    def _fetch_detail_texts(self, urls: list[str]) -> list[str | None]:
+        if not urls:
+            return []
+        workers = max(1, int(getattr(self, "detail_fetch_workers", 1) or 1))
+        if workers == 1 or len(urls) == 1:
+            return [self._fetch_detail_text(url) for url in urls]
+        results: list[str | None] = [None] * len(urls)
+        with ThreadPoolExecutor(max_workers=min(workers, len(urls))) as pool:
+            future_to_index = {
+                pool.submit(self._fetch_detail_text, url): index
+                for index, url in enumerate(urls)
+            }
+            for future in as_completed(future_to_index):
+                index = future_to_index[future]
+                try:
+                    results[index] = future.result()
+                except Exception:
+                    results[index] = None
+        return results
 
     def _date_in_range(self, value: str | None, date_from: str | None, date_to: str | None) -> bool:
         if not value:

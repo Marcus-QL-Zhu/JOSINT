@@ -59,6 +59,7 @@ class MorganPhilipsAdapter(SourceAdapter):
     exclude_url_patterns = SourceAdapter.exclude_url_patterns + ("/jobs-in-", "/shortlist", "?")
     job_url_regex = r"/(?:en-cn|zh-cn)/[^/?#]+-\d+/?$"
     detail_xpaths = ("/html/body/div[2]/div[1]/div[2]/div[2]/div[2]/div[1]/div/div/div/div/div",)
+    detail_fetch_workers = 8
     max_pages = 3
 
 

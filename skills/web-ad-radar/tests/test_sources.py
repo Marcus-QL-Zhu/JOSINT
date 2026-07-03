@@ -1,3 +1,5 @@
+import threading
+import time
 import unittest
 
 from radar.sources.base import CrawlResult, SourceAdapter, crawl_sources
@@ -227,6 +229,40 @@ class SourceAdapterTest(unittest.TestCase):
 
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0].title, "China Sales Director")
+
+    def test_morgan_philips_fetches_slow_detail_pages_concurrently(self):
+        from radar.sources.registry import MorganPhilipsAdapter
+
+        listing = """
+        <a href="/en-cn/role-one-shanghai-153001/">Role One</a>
+        <a href="/en-cn/role-two-shanghai-153002/">Role Two</a>
+        <a href="/en-cn/role-three-shanghai-153003/">Role Three</a>
+        """
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+
+        def fetch(url):
+            nonlocal active, max_active
+            if url.endswith("jobs-in-shanghai"):
+                return listing
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return f"<main><h2>Responsibilities</h2><p>JD for {url}</p></main>"
+
+        adapter = MorganPhilipsAdapter(fetch=fetch)
+        adapter.max_jobs = 3
+        adapter.target_job_count_without_dates = 3
+
+        jobs = adapter.crawl("2026-07-02")
+
+        self.assertEqual(len(jobs), 3)
+        self.assertGreaterEqual(max_active, 2)
+        self.assertTrue(all("JD for" in (job.jd_text or "") for job in jobs))
 
     def test_morgan_philips_uses_xpath_container_for_chinese_jd(self):
         from radar.sources.registry import MorganPhilipsAdapter
