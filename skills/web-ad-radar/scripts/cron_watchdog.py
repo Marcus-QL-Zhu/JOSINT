@@ -53,16 +53,24 @@ def load_state(workspace: Path) -> dict:
         return {}
 
 
-def should_retry(state: dict, today: str) -> bool:
-    """Decide if radar_cron.py should be run right now."""
+def should_retry(state: dict, today: str, *, current_hour: int | None = None, retry_after_hour: int = 7) -> bool:
+    """Decide if radar_cron.py should be run right now.
+
+    The scheduled job starts at 06:00 Asia/Shanghai. A hung run may never
+    update cron_state.json, leaving an old "success" date behind. Treat a
+    stale success as retryable after the normal completion window.
+    """
     if not state:
         return False
-    if state.get("last_run_status") == "success":
+    if state.get("last_run_status") == "success" and state.get("last_run_date") == today:
         return False
-    yesterday = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
-    if state.get("last_run_date") != yesterday:
+    if state.get("retry_count", 0) >= MAX_RETRIES:
         return False
-    return state.get("retry_count", 0) < MAX_RETRIES
+    if state.get("last_run_date") == today:
+        return state.get("last_run_status") != "success"
+    if current_hour is not None and current_hour < retry_after_hour:
+        return False
+    return True
 
 
 def trigger_cron(workspace: Path, env: dict[str, str]) -> int:
@@ -148,7 +156,8 @@ def main() -> None:
         log.info("Today's run already succeeded. No-op.")
         return
 
-    if not should_retry(state, today):
+    current_hour = datetime.now().hour
+    if not should_retry(state, today, current_hour=current_hour):
         if state.get("retry_count", 0) >= MAX_RETRIES and state.get("last_run_status") != "success":
             send_final_failure(env, state, today)
         log.info("Nothing to retry.")

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from radar.llm_minimax import MiniMaxClient
 from radar.metaso import MetasoClient, MetasoError
+from radar.bitable.client import BitableClient, FeishuApiError
 from radar.usage import ApiUsageLogger
 
 
@@ -100,6 +101,36 @@ class ApiClientTest(unittest.TestCase):
         self.assertEqual(calls[1]["json"], {"url": "https://example.com"})
         self.assertEqual(calls[2]["json"], {"q": "question", "model": "fast", "format": "simple"})
 
+    def test_bitable_list_all_records_uses_query_pagination(self):
+        client = BitableClient("app", "secret", "base", "table")
+        calls = []
+
+        def fake_request(method, path, **kwargs):
+            calls.append({"method": method, "path": path, **kwargs})
+            if len(calls) == 1:
+                return {"items": [{"record_id": "rec-1"}], "has_more": True, "page_token": "token-500"}
+            return {"items": [{"record_id": "rec-2"}], "has_more": False}
+
+        client._request = fake_request
+
+        rows = client.list_all_records()
+
+        self.assertEqual([row["record_id"] for row in rows], ["rec-1", "rec-2"])
+        self.assertEqual(calls[0]["params"], {"page_size": 500})
+        self.assertEqual(calls[0]["json"], {})
+        self.assertEqual(calls[1]["params"], {"page_size": 500, "page_token": "token-500"})
+        self.assertEqual(calls[1]["json"], {})
+
+    def test_bitable_list_all_records_rejects_repeated_page_token(self):
+        client = BitableClient("app", "secret", "base", "table")
+
+        def fake_request(method, path, **kwargs):
+            return {"items": [{"record_id": "rec"}], "has_more": True, "page_token": "same-token"}
+
+        client._request = fake_request
+
+        with self.assertRaisesRegex(FeishuApiError, "pagination token repeated"):
+            client.list_all_records()
 
 if __name__ == "__main__":
     unittest.main()

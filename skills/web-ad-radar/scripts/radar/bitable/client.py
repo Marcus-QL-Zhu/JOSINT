@@ -208,22 +208,33 @@ class BitableClient:
         """
         all_items: list[dict] = []
         page_token: str | None = None
+        seen_tokens: set[str] = set()
         while True:
-            body: dict = {"limit": min(page_size, 500)}
+            params: dict[str, Any] = {"page_size": min(page_size, 500)}
             if page_token:
-                body["page_token"] = page_token
+                params["page_token"] = page_token
             data = self._request(
                 "POST",
                 f"/bitable/v1/apps/{self.app_token}/tables/{self.table_id}/records/search",
-                json=body,
+                params=params,
+                json={},
             )
             items = data.get("items", [])
             all_items.extend(items)
             if not data.get("has_more"):
                 break
-            page_token = data.get("page_token")
-            if not page_token:
+            next_page_token = data.get("page_token")
+            if not next_page_token:
                 break
+            if next_page_token == page_token or next_page_token in seen_tokens:
+                raise FeishuApiError(
+                    -1,
+                    "bitable pagination token repeated; aborting to avoid infinite loop",
+                    {"page_token": next_page_token},
+                )
+            if page_token:
+                seen_tokens.add(page_token)
+            page_token = next_page_token
         return all_items
 
     def list_recent(self, limit: int = 500) -> list[dict]:

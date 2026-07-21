@@ -11,6 +11,7 @@ sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 from radar.models import JobRecord  # noqa: E402
 from radar.bitable.sync import SyncStats  # noqa: E402
 import radar_cron  # noqa: E402
+import cron_watchdog  # noqa: E402
 from radar_cron import _jobs_new_in_bitable  # noqa: E402
 
 
@@ -26,6 +27,26 @@ class RadarCronAnalysisQueueTest(unittest.TestCase):
 
         self.assertEqual([job.id for job in result], [new_job.id])
 
+class CronWatchdogRetryTest(unittest.TestCase):
+    def test_stale_success_retries_after_completion_window(self):
+        state = {"last_run_date": "2026-07-16", "last_run_status": "success", "retry_count": 0}
+
+        self.assertTrue(cron_watchdog.should_retry(state, "2026-07-21", current_hour=7))
+
+    def test_stale_success_waits_before_completion_window(self):
+        state = {"last_run_date": "2026-07-20", "last_run_status": "success", "retry_count": 0}
+
+        self.assertFalse(cron_watchdog.should_retry(state, "2026-07-21", current_hour=5))
+
+    def test_failed_today_retries(self):
+        state = {"last_run_date": "2026-07-21", "last_run_status": "failed", "retry_count": 0}
+
+        self.assertTrue(cron_watchdog.should_retry(state, "2026-07-21", current_hour=6))
+
+    def test_success_today_does_not_retry(self):
+        state = {"last_run_date": "2026-07-21", "last_run_status": "success", "retry_count": 0}
+
+        self.assertFalse(cron_watchdog.should_retry(state, "2026-07-21", current_hour=7))
 
 class RadarCronCrawlFailureTest(unittest.TestCase):
     def test_per_source_runner_uses_current_python_executable(self):
