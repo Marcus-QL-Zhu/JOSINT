@@ -1,11 +1,11 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 JOSINT daily cron entry point.
 
 Pipeline:
   1. Run per_source_runner (8 sources sequentially; same as v1)
   2. Sync local DB -> Feishu Bitable (with dedup)
-  3. Filter subset (robotics/AI/R&D) and run M3 employer analysis
+  3. Filter senior technical/business subset and run M3 employer analysis
   4. Write analysis back to Bitable
   5. Send an optional daily digest via Feishu IM
 

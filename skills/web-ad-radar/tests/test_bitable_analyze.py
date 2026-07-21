@@ -61,16 +61,31 @@ class BitableAnalyzeWriteBackTest(unittest.TestCase):
 
 
 class BitableAnalyzeSubsetTest(unittest.TestCase):
-    def test_daily_subset_includes_semiconductor_and_hr_as_or_conditions(self):
+    def test_daily_subset_requires_senior_tech_business_role_or_ai_leadership(self):
         jobs = [
-            JobRecord("src", "Src", "Semiconductor Sales", "https://e/semiconductor", industry_label="半导体", function_label="销售"),
-            JobRecord("src", "Src", "HRBP", "https://e/hr", industry_label="工业", function_label="人事"),
-            JobRecord("src", "Src", "Consumer Finance", "https://e/finance", industry_label="消费", function_label="财务"),
+            JobRecord("src", "Src", "Robotics Sales Director", "https://e/robotics-sales", industry_label="\u673a\u5668\u4eba", function_label="\u9500\u552e"),
+            JobRecord("src", "Src", "Semiconductor R&D Manager", "https://e/semi-rd", industry_label="\u534a\u5bfc\u4f53", function_label="\u7814\u53d1"),
+            JobRecord("src", "Src", "Consumer Electronics Operations VP", "https://e/consumer-electronics-ops", jd_text="Lead smart hardware product operations."),
+            JobRecord("src", "Src", "AI Transformation Director", "https://e/ai-transformation", industry_label="\u6d88\u8d39", function_label="IT", jd_text="Lead enterprise AI adoption for a cosmetics group."),
+            JobRecord("src", "Src", "Senior Algorithm Engineer", "https://e/ai-engineer", industry_label="\u673a\u5668\u4eba", function_label="\u7814\u53d1"),
+            JobRecord("src", "Src", "HR Director", "https://e/hr-director", industry_label="\u534a\u5bfc\u4f53", function_label="\u4eba\u4e8b"),
+            JobRecord("src", "Src", "Finance VP", "https://e/finance-vp", jd_text="AI software company finance leader."),
+            JobRecord("src", "Src", "Sales Director", "https://e/chemical-sales", industry_label="\u5316\u5de5", function_label="\u9500\u552e"),
+            JobRecord("src", "Src", "Assistant Manager Robotics Sales", "https://e/assistant-manager", industry_label="\u673a\u5668\u4eba", function_label="\u9500\u552e"),
+            JobRecord("src", "Src", "Asia General Manager Sourcing & Quality", "https://e/sourcing-quality", industry_label="\u6d88\u8d39", function_label="\u4f9b\u5e94\u94fe", jd_text="Lead sourcing operations and enterprise AI adoption."),
         ]
 
         result = filter_subset(jobs)
 
-        self.assertEqual([job.url for job in result], ["https://e/semiconductor", "https://e/hr"])
+        self.assertEqual(
+            [job.url for job in result],
+            [
+                "https://e/robotics-sales",
+                "https://e/semi-rd",
+                "https://e/consumer-electronics-ops",
+                "https://e/ai-transformation",
+            ],
+        )
 
 
 if __name__ == "__main__":

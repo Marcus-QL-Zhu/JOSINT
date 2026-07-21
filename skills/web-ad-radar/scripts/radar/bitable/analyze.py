@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Subset employer analysis for Feishu/OpenClaw runs.
 
 Filters local jobs to a configurable high-interest subset and runs the
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable
@@ -31,14 +32,62 @@ log = logging.getLogger(__name__)
 
 
 # Subset filter keywords for high-interest job intelligence workflows.
-# OR conditions: robotics, AI, R&D, semiconductor, HR.
-SUBSET_INDUSTRIES = [
-    "机器人", "AI", "artificial intelligence", "robotics", "robot",
-    "半导体", "semiconductor", "chip", "wafer",
+# Scheduled employer inference is intentionally narrower than full crawling:
+# senior/management role AND (target technical industry + business-line function,
+# OR explicit AI adoption/AI leadership role in any industry).
+TARGET_INDUSTRY_KEYWORDS = [
+    "robot", "robotics", "humanoid", "embodied ai", "automation robot",
+    "\u673a\u5668\u4eba", "\u5177\u8eab\u667a\u80fd", "\u4eba\u5f62\u673a\u5668\u4eba", "\u534f\u4f5c\u673a\u5668\u4eba",
+    "semiconductor", "wafer", "chip", "eda", "ic design", "foundry",
+    "\u534a\u5bfc\u4f53", "\u82af\u7247", "\u6676\u5706", "\u5c01\u6d4b", "\u96c6\u6210\u7535\u8def", "\u529f\u7387\u5668\u4ef6",
+    "artificial intelligence", " genai", " generative ai", "machine learning", "large language model", " llm",
+    "\u4eba\u5de5\u667a\u80fd", "\u5927\u6a21\u578b", "\u751f\u6210\u5f0fai", "\u751f\u6210\u5f0f AI", "\u673a\u5668\u5b66\u4e60", "\u7b97\u6cd5",
+    "consumer electronics", "smart hardware", "wearable", "iot device", "home appliance electronics",
+    "\u6d88\u8d39\u7535\u5b50", "\u667a\u80fd\u786c\u4ef6", "\u53ef\u7a7f\u6234", "\u667a\u80fd\u7a7f\u6234", "\u5bb6\u7535\u7535\u5b50",
 ]
-SUBSET_FUNCTIONS = [
-    "研发", "开发", "R&D", "research", "engineering", "engineer",
-    "人事", "HR", "human resources", "recruiter", "talent acquisition",
+TARGET_INDUSTRY_LABELS = {"\u673a\u5668\u4eba", "\u534a\u5bfc\u4f53"}
+
+BUSINESS_FUNCTION_KEYWORDS = [
+    "r&d", "research", "development", "engineering", "algorithm", "software", "embedded", "product development",
+    "\u7814\u53d1", "\u5f00\u53d1", "\u7b97\u6cd5", "\u5d4c\u5165\u5f0f", "\u8f6f\u4ef6", "\u4ea7\u54c1\u7814\u53d1",
+    "sales", "business development", " bd ", "commercial", "key account", "go-to-market", "gtm",
+    "\u9500\u552e", "\u5546\u52a1\u62d3\u5c55", "\u5ba2\u6237\u5f00\u53d1", "\u5927\u5ba2\u6237", "\u5546\u4e1a\u5316",
+    "marketing", "brand", "market", "growth", "product marketing",
+    "\u5e02\u573a", "\u54c1\u724c", "\u589e\u957f", "\u4ea7\u54c1\u5e02\u573a",
+    "operations", "business operations", "commercial operations", "product operations", "user operations", "strategy operations",
+    "\u8fd0\u8425", "\u4e1a\u52a1\u8fd0\u8425", "\u5546\u4e1a\u8fd0\u8425", "\u4ea7\u54c1\u8fd0\u8425", "\u7528\u6237\u8fd0\u8425", "\u6218\u7565\u8fd0\u8425",
+]
+BUSINESS_FUNCTION_LABELS = {"\u7814\u53d1", "\u9500\u552e", "\u5e02\u573a"}
+
+SUPPORT_FUNCTION_KEYWORDS = [
+    "hr", "human resources", "talent acquisition", "recruiter", "c&b", "compensation", "benefits", "hrbp",
+    "\u4eba\u4e8b", "\u62db\u8058", "\u85aa\u916c", "\u7ec4\u7ec7\u53d1\u5c55",
+    "finance", "accounting", "fp&a", "tax", "audit", "treasury", "controller",
+    "\u8d22\u52a1", "\u4f1a\u8ba1", "\u7a0e\u52a1", "\u5ba1\u8ba1", "\u8d44\u91d1",
+    "legal", "compliance", "risk", "intellectual property", " ip ",
+    "\u6cd5\u52a1", "\u5408\u89c4", "\u98ce\u63a7", "\u77e5\u8bc6\u4ea7\u6743",
+    "admin", "administration", "office manager", "secretary", "assistant", "facility",
+    "supply chain", "procurement", "sourcing", "quality", "logistics", "manufacturing", "production", "plant", "ehs",
+    "\u884c\u653f", "\u529e\u516c\u5ba4", "\u79d8\u4e66", "\u52a9\u7406", "\u8bbe\u65bd",
+    "\u4f9b\u5e94\u94fe", "\u91c7\u8d2d", "\u5bfb\u6e90", "\u8d28\u91cf", "\u7269\u6d41", "\u5236\u9020", "\u751f\u4ea7", "\u5de5\u5382",
+]
+SUPPORT_FUNCTION_LABELS = {"\u4eba\u4e8b", "\u8d22\u52a1", "\u6cd5\u52a1", "\u884c\u653f", "\u4f9b\u5e94\u94fe", "\u751f\u4ea7"}
+
+SENIORITY_INCLUDE_KEYWORDS = [
+    "manager", "senior manager", "director", "head of", "vp", "vice president", "general manager", "gm ",
+    "managing director", "country manager", "regional manager", "chief", "cxo", "ceo", "cto", "coo", "cmo",
+    "\u8d1f\u8d23\u4eba", "\u7ecf\u7406", "\u9ad8\u7ea7\u7ecf\u7406", "\u603b\u76d1", "\u526f\u603b\u88c1", "\u603b\u7ecf\u7406", "\u9996\u5e2d", "\u533a\u57df\u8d1f\u8d23\u4eba", "\u56fd\u5bb6\u7ecf\u7406",
+]
+ENTRY_LEVEL_EXCLUDE_KEYWORDS = [
+    "intern", "trainee", "graduate", "entry level", "junior", "assistant", "associate", "specialist",
+    "\u5b9e\u4e60", "\u7ba1\u57f9", "\u5e94\u5c4a", "\u521d\u7ea7", "\u52a9\u7406", "\u4e13\u5458",
+]
+
+AI_LEADERSHIP_KEYWORDS = [
+    "head of ai", "ai head", "ai leader", "ai director", "ai manager", "chief ai", "ai transformation",
+    "ai strategy", "ai implementation", "ai adoption", "enterprise ai", "genai lead", "genai director",
+    "\u4eba\u5de5\u667a\u80fd\u8d1f\u8d23\u4eba", "ai\u8d1f\u8d23\u4eba", "AI\u8d1f\u8d23\u4eba", "AI \u8d1f\u8d23\u4eba", "ai \u8d1f\u8d23\u4eba", "ai\u843d\u5730", "AI\u843d\u5730", "AI \u843d\u5730",
+    "ai\u8f6c\u578b", "AI\u8f6c\u578b", "AI \u8f6c\u578b", "\u667a\u80fd\u5316\u8d1f\u8d23\u4eba", "\u5927\u6a21\u578b\u8d1f\u8d23\u4eba", "\u751f\u6210\u5f0fai\u8d1f\u8d23\u4eba", "\u751f\u6210\u5f0fAI\u8d1f\u8d23\u4eba",
 ]
 
 # Confidence threshold for "high confidence" in the daily digest
@@ -83,14 +132,84 @@ class AnalysisResult:
 
 
 def is_subset(job: JobRecord) -> bool:
-    """True if this job matches the configured high-interest subset."""
-    industry = (job.industry_label or job.industry or "").lower()
-    function = (job.function_label or job.function or "").lower()
-    return (
-        any(k.lower() in industry for k in SUBSET_INDUSTRIES)
-        or any(k.lower() in function for k in SUBSET_FUNCTIONS)
-    )
+    """True if this job should receive scheduled hidden-employer inference."""
+    title_text = _title_text(job)
+    all_text = _job_text(job)
+    if not _has_senior_management_level(title_text):
+        return False
+    if _has_support_function(job, _function_text(job)):
+        return False
+    if _has_ai_leadership_role(_function_text(job)):
+        return True
+    return _has_target_industry(job, all_text) and _has_business_function(job, all_text)
 
+
+def _title_text(job: JobRecord) -> str:
+    return f"{job.title or ''}\n{job.raw_title or ''}".lower()
+
+
+def _job_text(job: JobRecord) -> str:
+    return "\n".join([
+        job.title or "",
+        job.raw_title or "",
+        job.industry_label or "",
+        job.industry or "",
+        job.function_label or "",
+        job.function or "",
+        job.list_excerpt or "",
+        job.jd_text or job.detail_text or "",
+        job.company_description or "",
+    ]).lower()
+
+
+def _function_text(job: JobRecord) -> str:
+    return "\n".join([
+        job.title or "",
+        job.raw_title or "",
+        job.function_label or "",
+        job.function or "",
+        job.list_excerpt or "",
+    ]).lower()
+
+
+def _has_senior_management_level(title_text: str) -> bool:
+    if _contains_any(title_text, ENTRY_LEVEL_EXCLUDE_KEYWORDS):
+        return False
+    return _contains_any(title_text, SENIORITY_INCLUDE_KEYWORDS)
+
+
+def _has_target_industry(job: JobRecord, text: str) -> bool:
+    label_text = f"{job.industry_label or ''}\n{job.industry or ''}"
+    return any(label in label_text for label in TARGET_INDUSTRY_LABELS) or _contains_any(text, TARGET_INDUSTRY_KEYWORDS)
+
+
+def _has_business_function(job: JobRecord, text: str) -> bool:
+    label_text = f"{job.function_label or ''}\n{job.function or ''}"
+    return any(label in label_text for label in BUSINESS_FUNCTION_LABELS) or _contains_any(text, BUSINESS_FUNCTION_KEYWORDS)
+
+
+def _has_support_function(job: JobRecord, text: str) -> bool:
+    label_text = f"{job.function_label or ''}\n{job.function or ''}"
+    return any(label in label_text for label in SUPPORT_FUNCTION_LABELS) or _contains_any(text, SUPPORT_FUNCTION_KEYWORDS)
+
+
+def _has_ai_leadership_role(text: str) -> bool:
+    return _contains_any(text, AI_LEADERSHIP_KEYWORDS)
+
+
+def _contains_any(text: str, keywords: list[str]) -> bool:
+    return any(_keyword_in_text(text, keyword.lower()) for keyword in keywords)
+
+
+def _keyword_in_text(text: str, keyword: str) -> bool:
+    normalized = keyword.strip().lower()
+    if not normalized:
+        return False
+    if any("\u4e00" <= char <= "\u9fff" for char in normalized):
+        return normalized in text
+    if re.fullmatch(r"[a-z0-9&/+-]+", normalized):
+        return re.search(rf"(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])", text) is not None
+    return normalized in text
 
 def filter_subset(jobs: Iterable[JobRecord]) -> list[JobRecord]:
     return [j for j in jobs if is_subset(j)]
