@@ -67,7 +67,7 @@ def main() -> int:
     date_to = default_day
 
     # Per-source override: cap jobs at args.max_jobs to keep runs bounded.
-    slugs = [s.strip() for s in args.companies.split(",")] if args.companies else list(SOURCES)
+    slugs = [s.strip() for s in args.companies.split(",")] if args.companies else [s for s, source in SOURCES.items() if source.enabled]
     adapters = build_adapters(slugs)
     for adapter in adapters:
         adapter.max_jobs = min(adapter.max_jobs, args.max_jobs)

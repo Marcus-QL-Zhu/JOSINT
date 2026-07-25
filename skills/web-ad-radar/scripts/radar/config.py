@@ -15,6 +15,9 @@ SOURCES: dict[str, SourceConfig] = {
     "rgf": SourceConfig("rgf", "RGF Professional Recruitment China", "https://www.rgf-professional.com.cn/zh/jobs"),
     "intellipro": SourceConfig("intellipro", "IntelliPro / 英特利普", "https://intellipro.applytojob.com/"),
     "risfond": SourceConfig("risfond", "Risfond / 锐仕方达", "https://www.risfond.com/job/"),
+    "watchjobs": SourceConfig("watchjobs", "WatchJobs", "https://watchjobs.net/"),
+    "talent-cn": SourceConfig("talent-cn", "Talent.com China", "https://cn.talent.com/jobs"),
+    "bebee-cn": SourceConfig("bebee-cn", "BeBee China", "https://cn.bebee.com/jobs", enabled=False),
 }
 
 ALIASES = {
@@ -31,7 +34,7 @@ ALIASES = {
 
 def resolve_companies(value: str | None) -> list[str]:
     if not value:
-        return list(SOURCES)
+        return [slug for slug, source in SOURCES.items() if source.enabled]
     resolved: list[str] = []
     for item in value.split(","):
         slug = item.strip().lower().replace("_", "-")

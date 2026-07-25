@@ -32,6 +32,25 @@ class JobRecord:
     label_confidence: str | None = None
     label_evidence: list[str] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
+    company_name: str | None = None
+    source_job_id: str | None = None
+    upstream_source: str | None = None
+    upstream_url: str | None = None
+    upstream_job_id: str | None = None
+    experience: str | None = None
+    education: str | None = None
+    seniority_label: str | None = None
+    canonical_job_id: str | None = None
+    is_target_job: bool | None = None
+    target_reason: str | None = None
+    observation_count: int = 1
+    source_urls: list[str] = field(default_factory=list)
+    upstream_sources: list[str] = field(default_factory=list)
+    guessed_employer: str | None = None
+    employer_confidence: float | None = None
+    employer_evidence: list[dict[str, Any]] = field(default_factory=list)
+    employer_reasoning: str | None = None
+    analysis_completed_at: str | None = None
     id: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -44,7 +63,7 @@ class JobRecord:
         if self.raw_title is None:
             self.raw_title = self.title
         digest = hashlib.sha256(f"{self.source_slug}|{self.canonical_url}".encode("utf-8")).hexdigest()[:12]
-        self.id = f"{self.source_slug}:{digest}"
+        self.id = self.canonical_job_id or f"{self.source_slug}:{digest}"
 
 
 @dataclass(slots=True)

@@ -26,6 +26,7 @@ from .client import BitableClient
 from .dedup import url_hash
 from ..inference import analyze_jobs as v1_analyze_jobs
 from ..models import JobRecord, EmployerGuess
+from ..targeting import evaluate_target
 
 
 log = logging.getLogger(__name__)
@@ -133,16 +134,7 @@ class AnalysisResult:
 
 def is_subset(job: JobRecord) -> bool:
     """True if this job should receive scheduled hidden-employer inference."""
-    title_text = _title_text(job)
-    all_text = _job_text(job)
-    if not _has_senior_management_level(title_text):
-        return False
-    if _has_support_function(job, _function_text(job)):
-        return False
-    if _has_ai_leadership_role(_function_text(job)):
-        return True
-    return _has_target_industry(job, all_text) and _has_business_function(job, all_text)
-
+    return evaluate_target(job).is_target
 
 def _title_text(job: JobRecord) -> str:
     return f"{job.title or ''}\n{job.raw_title or ''}".lower()

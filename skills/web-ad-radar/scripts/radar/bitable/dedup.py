@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Dedup helpers for the Bitable sync layer.
 
@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import re
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -94,6 +93,7 @@ class Deduper:
         self.client = client
         self._url_index: dict[str, str] = {}      # url -> record_id
         self._hash_index: dict[str, str] = {}     # url_hash -> record_id
+        self._canonical_index: dict[str, str] = {}
         self._loaded = False
 
     def refresh_snapshot(self) -> None:
@@ -102,6 +102,7 @@ class Deduper:
         records = self.client.list_all_records()
         url_index: dict[str, str] = {}
         hash_index: dict[str, str] = {}
+        canonical_index: dict[str, str] = {}
         for record in records:
             fields = record.get("fields", {}) or {}
             rid = record.get("record_id")
@@ -115,11 +116,15 @@ class Deduper:
                 url_value = ""
             if url_value:
                 url_index[url_value] = rid
-            hash_value = fields.get("url_hash")
-            if isinstance(hash_value, str) and hash_value:
+            hash_value = _text_field_value(fields.get("url_hash"))
+            if hash_value:
                 hash_index[hash_value] = rid
+            canonical_value = _text_field_value(fields.get("canonical_job_id"))
+            if canonical_value:
+                canonical_index[canonical_value] = rid
         self._url_index = url_index
         self._hash_index = hash_index
+        self._canonical_index = canonical_index
         self._loaded = True
         log.info("Deduper: indexed %d urls, %d hashes from %d records", len(url_index), len(hash_index), len(records))
 
@@ -127,7 +132,9 @@ class Deduper:
         if not self._loaded:
             self.refresh_snapshot()
 
-    def lookup(self, job_url: str) -> DedupResult:
+    def lookup(
+        self, job_url: str, canonical_job_id: str | None = None
+    ) -> DedupResult:
         """Decide create vs update for a single job URL.
 
         Returns DedupResult with action='new' if no match found.
@@ -137,6 +144,14 @@ class Deduper:
             return DedupResult(action="new", record_id=None, matched_field=None)
 
         self._ensure_loaded()
+        if canonical_job_id:
+            record_id = self._canonical_index.get(canonical_job_id)
+            if record_id:
+                return DedupResult(
+                    action="update_canonical",
+                    record_id=record_id,
+                    matched_field="canonical_job_id",
+                )
 
         # 1. Primary: url
         record_id = self._url_index.get(job_url)
@@ -159,3 +174,16 @@ class Deduper:
             )
 
         return DedupResult(action="new", record_id=None, matched_field=None)
+
+
+def _text_field_value(value) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list) and value:
+        first = value[0]
+        if isinstance(first, dict):
+            return str(first.get("text") or first.get("value") or "")
+        return str(first)
+    if isinstance(value, dict):
+        return str(value.get("text") or value.get("value") or "")
+    return ""

@@ -161,6 +161,7 @@ def run_cron(
         return 2
 
     client = BitableClient(app_id, app_secret, app_token, table_id)
+    _ensure_canonical_bitable_fields(client)
     deduper = Deduper(client)
     syncer = BitableSyncer(client, deduper, cache_path=workspace / "data" / "bitable_state.json")
     deduper.refresh_snapshot()
@@ -170,13 +171,23 @@ def run_cron(
     # snapshot of yesterday's job ads.
     yesterday = yesterday_business_iso(timezone_name)
     store = JobStore(workspace / "data" / "jobs.sqlite")
-    all_jobs = store.list_jobs()
-    jobs_today = [j for j in all_jobs if (j.last_seen_at or "").startswith(yesterday) or not j.last_seen_at]
+    # Feishu receives only canonical target jobs. The unanalyzed constraint
+    # prevents M3/Metaso from being spent again on a job seen through another
+    # aggregator or during a later month.
+    all_jobs = store.list_canonical_jobs()
+    jobs_today = store.list_canonical_jobs(
+        target_only=True, last_seen_at=yesterday
+    )
+    jobs_to_analyze = [
+        job for job in jobs_today if not job.analysis_completed_at
+    ]
 
     sync_stats = syncer.sync_many(jobs_today, crawl_run_id=crawl_run_id)
     log.info("Sync done: %s", sync_stats.as_dict())
-    jobs_new_in_bitable = _jobs_new_in_bitable(jobs_today, sync_stats)
-    log.info("New jobs eligible for analysis: %d/%d seen today", len(jobs_new_in_bitable), len(jobs_today))
+    # The DB analysis marker is authoritative. A migrated canonical job may
+    # update an old Feishu row instead of creating one and still needs analysis.
+    jobs_new_in_bitable = jobs_to_analyze
+    log.info("Unanalyzed canonical jobs eligible for analysis: %d", len(jobs_new_in_bitable))
 
     # ---- 3. Subset analysis (v1 inference pipeline + optional Metaso) ----
     if skip_analyze:
@@ -241,6 +252,15 @@ def run_cron(
             model=analysis_model,
         )
         log.info("Wrote %d/%d analysis results back to bitable", written, len(analysis_results))
+        for result in analysis_results:
+            store.mark_analysis_completed(
+                result.job_id,
+                completed_at=now_utc_iso(),
+                guessed_employer=result.guessed_employer,
+                confidence=result.confidence_score,
+                evidence=result.external_sources,
+                reasoning=result.reasoning,
+            )
         if analysis_log_table_id:
             log_client = BitableClient(app_id, app_secret, app_token, analysis_log_table_id)
             log_written = write_analysis_logs_to_bitable(
@@ -331,6 +351,29 @@ def _jobs_new_in_bitable(jobs: list[Any], sync_stats: Any) -> list[Any]:
     if not new_ids:
         return []
     return [job for job in jobs if getattr(job, "id", None) in new_ids]
+
+
+def _ensure_canonical_bitable_fields(client: BitableClient) -> None:
+    """Idempotently add optional canonical columns before the daily sync."""
+    requested = {
+        "canonical_job_id": 1,
+        "company_name": 1,
+        "source_count": 2,
+        "source_urls": 1,
+        "upstream_sources": 1,
+        "seniority": 1,
+        "target_reason": 1,
+        "is_target_job": 7,
+    }
+    try:
+        existing = client.list_fields(use_cache=False)
+        for name, field_type in requested.items():
+            if name not in existing:
+                client.create_field(name, field_type)
+    except Exception as exc:
+        # Legacy tables remain usable; BitableSyncer writes only fields that
+        # actually exist after this best-effort migration.
+        log.warning("Could not ensure canonical Bitable fields: %s", exc)
 
 
 def _send_failure(env: dict[str, str], today: str, stage: str, error: str) -> None:

@@ -241,3 +241,13 @@ ADAPTERS: dict[str, type[SourceAdapter]] = {
 
 def build_adapters(slugs: list[str], fetch: Callable[[str], str] | None = None) -> list[SourceAdapter]:
     return [ADAPTERS[slug](fetch=fetch) for slug in slugs if slug in ADAPTERS]
+
+
+from .aggregators import BeBeeChinaAdapter, TalentChinaAdapter
+from .watchjobs import WatchJobsAdapter
+
+ADAPTERS.update({
+    WatchJobsAdapter.slug: WatchJobsAdapter,
+    TalentChinaAdapter.slug: TalentChinaAdapter,
+    BeBeeChinaAdapter.slug: BeBeeChinaAdapter,
+})

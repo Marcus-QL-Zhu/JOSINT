@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Local DB -> Feishu Bitable sync.
 
@@ -17,14 +17,13 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from .client import BitableClient, FeishuApiError
-from .dedup import DedupResult, Deduper, url_hash
+from .dedup import Deduper, url_hash
 from ..models import JobRecord
 
 
@@ -65,6 +64,10 @@ class BitableSyncer:
         self.deduper = deduper
         self.cache_path = cache_path
         self._cache: dict[str, str] = self._load_cache()
+        try:
+            self._field_names = set(client.list_fields())
+        except Exception:
+            self._field_names = set()
 
     # ---------- cache ----------
 
@@ -114,6 +117,21 @@ class BitableSyncer:
             "crawl_run_id": crawl_run_id,
             "jd_text": jd,
         }
+        if job.canonical_job_id:
+            canonical_fields = {
+                "canonical_job_id": job.canonical_job_id,
+                "company_name": job.company_name or job.guessed_employer or "",
+                "source_count": job.observation_count,
+                "source_urls": json.dumps(job.source_urls, ensure_ascii=False),
+                "upstream_sources": json.dumps(job.upstream_sources, ensure_ascii=False),
+                "seniority": job.seniority_label or "",
+                "target_reason": job.target_reason or "",
+                "is_target_job": bool(job.is_target_job),
+            }
+            fields.update({
+                name: value for name, value in canonical_fields.items()
+                if name in self._field_names
+            })
         if is_new:
             fields["first_seen_date"] = _iso_or_today_ms(job.first_seen_at, default=today_ms)
             fields["month"] = _job_month(job.first_seen_at) or _job_month(job.last_seen_at) or _current_month()
@@ -132,28 +150,35 @@ class BitableSyncer:
     def sync_one(self, job: JobRecord, crawl_run_id: str = "") -> str:
         """Sync a single job. Returns action taken: 'new'|'updated'|'skipped'."""
         url = job.url
-        cached_id = self._cache.get(url)
+        cache_key = job.canonical_job_id or url
+        cached_id = self._cache.get(cache_key) or self._cache.get(url)
         if cached_id:
             # Warm path: trust the cache, refresh last_seen_date and
             # overwrite jd_text so the table keeps the freshest JD content.
             try:
-                jd = (job.jd_text or job.detail_text or "") or ""
-                self.client.update_record(cached_id, {
-                    "last_seen_date": _today_ms(),
-                    "last_seen_month": _job_month(job.last_seen_at) or _current_month(),
-                    "crawl_run_id": crawl_run_id,
-                    "jd_text": jd[:4500],
-                })
+                self.client.update_record(
+                    cached_id,
+                    self._job_to_fields(
+                        job, is_new=False, crawl_run_id=crawl_run_id
+                    ),
+                )
+                self._cache[cache_key] = cached_id
+                self._cache[url] = cached_id
                 return "updated"
             except FeishuApiError as e:
                 log.warning("Cached record %s update failed (%s); falling back to lookup", cached_id, e)
                 self._cache.pop(url, None)
 
-        result = self.deduper.lookup(url)
+        result = (
+            self.deduper.lookup(url, job.canonical_job_id)
+            if job.canonical_job_id
+            else self.deduper.lookup(url)
+        )
         fields = self._job_to_fields(job, is_new=(result.action == "new"), crawl_run_id=crawl_run_id)
 
         if result.action == "new":
             record_id = self.client.create_record(fields)
+            self._cache[cache_key] = record_id
             self._cache[url] = record_id
             return "new"
 
@@ -168,13 +193,13 @@ class BitableSyncer:
         # On every update, refresh last_seen_date + crawl_run_id and
         # overwrite jd_text with the latest crawl's JD content.
 
-        jd = (job.jd_text or job.detail_text or "") or ""
-        self.client.update_record(result.record_id, {
-            "last_seen_date": _today_ms(),
-            "last_seen_month": _job_month(job.last_seen_at) or _current_month(),
-            "crawl_run_id": crawl_run_id,
-            "jd_text": jd[:4500],
-        })
+        self.client.update_record(
+            result.record_id,
+            self._job_to_fields(
+                job, is_new=False, crawl_run_id=crawl_run_id
+            ),
+        )
+        self._cache[cache_key] = result.record_id
         self._cache[url] = result.record_id
         return "updated"
 
@@ -216,8 +241,7 @@ class BitableSyncer:
         """
         # We don't import storage.JobStore to avoid a hard dep on the v1
         # schema. Read columns directly and reconstruct the dataclass.
-        from ..models import JobRecord  # local import to avoid cycle
-        from ..storage import JobStore  # noqa: F401  (kept for side effects)
+        from ..storage import JobStore
 
         store = JobStore(db_path)
         # list_jobs returns all rows; filter in Python so we can keep

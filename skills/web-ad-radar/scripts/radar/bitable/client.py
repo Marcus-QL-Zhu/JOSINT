@@ -143,6 +143,19 @@ class BitableClient:
             self._field_id_cache = None
         return self.list_fields().get(field_name)
 
+    def create_field(self, field_name: str, field_type: int = 1) -> str:
+        """Create a Bitable field and return its field_id.
+
+        Feishu field types used here: 1=text, 2=number, 7=checkbox.
+        """
+        data = self._request(
+            "POST",
+            f"/bitable/v1/apps/{self.app_token}/tables/{self.table_id}/fields",
+            json={"field_name": field_name, "type": field_type},
+        )
+        self._field_id_cache = None
+        return str((data.get("field") or {}).get("field_id") or "")
+
     # ---------- records ----------
 
     def create_record(self, fields: dict[str, Any]) -> str:

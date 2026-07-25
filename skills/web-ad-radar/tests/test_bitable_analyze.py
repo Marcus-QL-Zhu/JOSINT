@@ -81,7 +81,6 @@ class BitableAnalyzeSubsetTest(unittest.TestCase):
             [job.url for job in result],
             [
                 "https://e/robotics-sales",
-                "https://e/semi-rd",
                 "https://e/consumer-electronics-ops",
                 "https://e/ai-transformation",
             ],
