@@ -44,12 +44,24 @@ class WatchJobsAdapter(AggregatorAdapter):
                     or _text_value(company.get("name_en") if isinstance(company, dict) else None)
                     or _text_value(item.get("company_name"))
                 )
-                description = "\n".join(filter(None, (
-                    _text_value(item.get("description_zh")),
-                    _text_value(item.get("min_qualifications_zh")),
-                    _text_value(item.get("description_en")),
-                    _text_value(item.get("min_qualifications_en")),
-                )))
+                company_description = _first_text(
+                    company.get("description_zh") if isinstance(company, dict) else None,
+                    company.get("introduction_zh") if isinstance(company, dict) else None,
+                    company.get("summary_zh") if isinstance(company, dict) else None,
+                    item.get("company_description"),
+                    item.get("company_introduction"),
+                    item.get("company_intro"),
+                    company.get("description_en") if isinstance(company, dict) else None,
+                )
+                description = _merge_content(
+                    ("公司介绍", company_description),
+                    ("岗位职责", _text_value(item.get("description_zh"))),
+                    ("任职要求", _text_value(item.get("min_qualifications_zh"))),
+                    ("职位福利", _first_text(item.get("benefits_zh"), item.get("benefits"))),
+                    ("Responsibilities", _text_value(item.get("description_en"))),
+                    ("Qualifications", _text_value(item.get("min_qualifications_en"))),
+                    ("Benefits", _text_value(item.get("benefits_en"))),
+                )
                 published_at = _date_only(item.get("date_posted"))
                 if (
                     published_at
@@ -78,6 +90,7 @@ class WatchJobsAdapter(AggregatorAdapter):
                     list_excerpt=_text_value(item.get("highlight")) or description[:500],
                     detail_text=description[:8000] or None,
                     jd_text=description[:8000] or None,
+                    company_description=company_description,
                     upstream_source=_source_name(upstream_url),
                     upstream_url=upstream_url,
                     upstream_job_id=_job_id_from_url(upstream_url) if upstream_url else None,
@@ -122,6 +135,29 @@ def _nested_name(value) -> str | None:
     if not isinstance(value, dict):
         return _text_value(value)
     return _text_value(value.get("name_zh")) or _text_value(value.get("name_en"))
+
+
+def _first_text(*values) -> str | None:
+    for value in values:
+        text = _text_value(value)
+        if text:
+            return text
+    return None
+
+
+def _merge_content(*sections: tuple[str, str | None]) -> str:
+    parts: list[str] = []
+    seen: list[str] = []
+    for label, value in sections:
+        cleaned = re.sub(r"\s+", " ", value or "").strip()
+        if not cleaned or any(cleaned in existing for existing in seen):
+            continue
+        keep = [index for index, existing in enumerate(seen) if existing not in cleaned]
+        parts = [parts[index] for index in keep]
+        seen = [seen[index] for index in keep]
+        parts.append(f"{label}：{cleaned}")
+        seen.append(cleaned)
+    return "\n".join(parts)
 
 
 def _salary(item: dict) -> str | None:

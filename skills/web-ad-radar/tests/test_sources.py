@@ -157,6 +157,49 @@ class SourceAdapterTest(unittest.TestCase):
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0].title, "Finance Director")
 
+    def test_randstad_preserves_company_intro_before_role_sections(self):
+        from radar.sources.registry import RandstadAdapter
+
+        listing = '<a href="/en/jobs/ecommerce-product-manager_shenzhen_12345_en/">Ecommerce Product Manager</a>'
+        detail = """
+        <html><body><main>
+          <h2>Company introduction</h2>
+          <p>Our client is a Shenzhen wearable-audio company known for bone-conduction sports headphones.</p>
+          <h2>Team introduction</h2><p>The team owns global DTC growth.</p>
+          <h2>Responsibilities</h2><p>Own ecommerce product strategy and conversion.</p>
+          <h2>Requirements</h2><p>Experience with international consumer electronics.</p>
+        </main><footer>Privacy Policy</footer></body></html>
+        """
+        adapter = RandstadAdapter(fetch=lambda url: listing if url.endswith("/jobs/") else detail)
+
+        jobs = adapter.crawl("2026-07-30")
+
+        self.assertIn("bone-conduction sports headphones", jobs[0].jd_text)
+        self.assertIn("global DTC growth", jobs[0].jd_text)
+        self.assertIn("Own ecommerce product strategy", jobs[0].jd_text)
+        self.assertIn("bone-conduction sports headphones", jobs[0].company_description)
+        self.assertNotIn("Privacy Policy", jobs[0].jd_text)
+
+    def test_robert_half_merges_company_intro_and_description_slot(self):
+        from radar.sources.registry import RobertHalfAdapter
+
+        listing = '<a href="/cn/en/job/shenzhen/product-director/123">Product Director</a>'
+        detail = """
+        <html><body>
+          <section>About our client: A global robotics company developing dexterous manipulation systems.</section>
+          <div slot="description" data-testid="job-details-description">
+            <p>Responsibilities: Lead product strategy for embodied AI platforms.</p>
+            <p>Requirements: Ten years of product leadership.</p>
+          </div>
+        </body></html>
+        """
+        adapter = RobertHalfAdapter(fetch=lambda url: listing if url.endswith("/jobs") else detail)
+
+        jobs = adapter.crawl("2026-07-30")
+
+        self.assertIn("global robotics company", jobs[0].jd_text)
+        self.assertIn("embodied AI platforms", jobs[0].jd_text)
+
     def test_mojibake_title_falls_back_to_url_slug(self):
         from radar.sources.registry import RandstadAdapter
 
@@ -427,6 +470,31 @@ class SourceAdapterTest(unittest.TestCase):
         self.assertIn("供应商管理", jobs[0].jd_text)
         self.assertIn("公司介绍", jobs[0].jd_text)
 
+    def test_structured_detail_preserves_leading_company_context(self):
+        listing = '<a href="/job/robotics-director">Robotics Director</a>'
+        detail = """
+        <script type="application/ld+json">
+        {
+          "@type": "JobPosting",
+          "description": "This is a confidential leadership search.",
+          "responsibilities": "Lead the robotics R&D organization.",
+          "qualifications": "Deep manipulation experience.",
+          "jobBenefits": "Long-term equity incentive.",
+          "hiringOrganization": {
+            "description": "A dexterous-robotics company with proprietary tactile sensors."
+          }
+        }
+        </script>
+        """
+        adapter = DummyAdapter(fetch=lambda url: listing if url.endswith("/jobs") else detail)
+
+        jobs = adapter.crawl("2026-07-30")
+
+        self.assertTrue(jobs[0].jd_text.startswith("公司介绍"))
+        self.assertIn("proprietary tactile sensors", jobs[0].jd_text)
+        self.assertIn("Lead the robotics R&D organization", jobs[0].jd_text)
+        self.assertIn("Long-term equity incentive", jobs[0].jd_text)
+
     def test_detail_text_removes_script_and_head_boilerplate(self):
         def fetch(url):
             if url.endswith("/jobs"):
@@ -470,6 +538,27 @@ class SourceAdapterTest(unittest.TestCase):
         self.assertIn("供应商管理", jobs[0].jd_text)
         self.assertNotIn("工作机会 首页", jobs[0].jd_text)
         self.assertNotIn("隐私条款", jobs[0].jd_text)
+
+
+    def test_risfond_merges_client_introduction_with_detail(self):
+        from radar.sources.registry import RisfondAdapter
+
+        adapter = RisfondAdapter(fetch=lambda _url: "<main>Responsibilities: Lead semiconductor R&amp;D.</main>")
+        adapter._fetch_job_list = lambda _page: {
+            "Data": [{
+                "JobId": "88",
+                "Title": "R&D Director",
+                "LocationsStr": "Shanghai",
+                "LastUpdatedStr": "2026-07-29",
+                "ClientIntroduction": "A European compound-semiconductor equipment company.",
+            }]
+        }
+
+        jobs = adapter.crawl("2026-07-30", date_from="2026-07-29", date_to="2026-07-29")
+
+        self.assertIn("compound-semiconductor equipment company", jobs[0].jd_text)
+        self.assertIn("Lead semiconductor R&D", jobs[0].jd_text)
+        self.assertEqual(jobs[0].company_description, "A European compound-semiconductor equipment company.")
 
 
 if __name__ == "__main__":

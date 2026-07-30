@@ -10,7 +10,7 @@ sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 from radar.bitable.analyze import AnalysisResult, filter_subset, write_back_to_bitable  # noqa: E402
 from radar.bitable.dedup import url_hash  # noqa: E402
-from radar.models import JobRecord  # noqa: E402
+from radar.models import EmployerGuess, JobRecord  # noqa: E402
 
 
 class FakeBitableClient:
@@ -61,6 +61,14 @@ class BitableAnalyzeWriteBackTest(unittest.TestCase):
 
 
 class BitableAnalyzeSubsetTest(unittest.TestCase):
+    def test_high_confidence_flag_matches_point_eight_rubric(self):
+        job = JobRecord("src", "Src", "AI Director", "https://e/ai")
+        medium = EmployerGuess(job.id, "Example", "medium", 0.79)
+        high = EmployerGuess(job.id, "Example", "high", 0.80)
+
+        self.assertFalse(AnalysisResult.from_v1_guess(medium, job).is_high_confidence)
+        self.assertTrue(AnalysisResult.from_v1_guess(high, job).is_high_confidence)
+
     def test_daily_subset_requires_senior_tech_business_role_or_ai_leadership(self):
         jobs = [
             JobRecord("src", "Src", "Robotics Sales Director", "https://e/robotics-sales", industry_label="\u673a\u5668\u4eba", function_label="\u9500\u552e"),

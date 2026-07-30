@@ -21,6 +21,8 @@ class WatchJobsNextDataTest(unittest.TestCase):
                 "title": "半导体研发总监",
                 "url": upstream,
                 "date_posted": "2026-07-24T00:00:00.000Z",
+                "company_description": "A fabless AI accelerator company.",
+                "benefits_en": "Long-term incentive plan.",
                 "location": "上海市",
                 "description_zh": "负责芯片研发团队。",
                 "min_qualifications_zh": "十年以上半导体经验。",
@@ -44,6 +46,9 @@ class WatchJobsNextDataTest(unittest.TestCase):
         self.assertEqual("示例芯片", records[0].company_name)
         self.assertEqual("boss", records[0].upstream_source)
         self.assertEqual(upstream, records[0].upstream_url)
+        self.assertIn("fabless AI accelerator company", records[0].jd_text)
+        self.assertIn("Long-term incentive plan", records[0].jd_text)
+        self.assertEqual("A fabless AI accelerator company.", records[0].company_description)
         self.assertEqual(1, len(calls))
         self.assertTrue(calls[0].startswith("https://watchjobs.net/"))
 

@@ -13,6 +13,21 @@ from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
 from ..models import JobRecord
 
 
+COMPANY_CONTEXT_ANCHORS = (
+    "公司介绍", "客户介绍", "公司简介", "客户简介", "我们的客户", "关于客户",
+    "团队介绍", "雇主介绍", "About the company", "About our client", "Our client",
+    "Company overview", "Client overview",
+)
+ROLE_CONTENT_ANCHORS = (
+    "职位描述", "岗位职责", "任职要求", "职位名称", "关于我们", "你将会做什么",
+    "Job description", "Job Description", "Responsibilities", "Role description", "Requirements",
+)
+DETAIL_END_MARKERS = (
+    "立即投递 分享", "邀请好友", "隐私条款", "Powered by", "Privacy Policy",
+    "CONTACT US", "services Talent Acquisition",
+)
+
+
 def default_fetch(url: str, timeout: int = 30) -> str:
     req = request.Request(
         url,
@@ -113,6 +128,7 @@ class SourceAdapter:
         jobs: list[JobRecord] = []
         for index, (url, title, raw_title, link_text, context, published_at) in enumerate(candidates):
             jd_text = detail_texts[index] or self._fallback_listing_detail(link_text, context)
+            company_description = self._extract_company_description(jd_text)
             jobs.append(
                 JobRecord(
                     source_slug=self.slug,
@@ -126,6 +142,7 @@ class SourceAdapter:
                     list_excerpt=self._clean_text(context)[:500],
                     detail_text=jd_text,
                     jd_text=jd_text,
+                    company_description=company_description,
                     raw_title=raw_title or title,
                     raw={"source_start_url": self.start_url, "raw_title": raw_title},
                 )
@@ -252,7 +269,10 @@ class SourceAdapter:
         structured = [c for c in structured if c]
         if structured:
             scored = [
-                (self._score_detail_candidate(self._trim_detail_text(candidate)), self._trim_detail_text(candidate))
+                (
+                    self._score_detail_candidate(self._trim_detail_text(candidate, preserve_leading=True)),
+                    self._trim_detail_text(candidate, preserve_leading=True),
+                )
                 for candidate in structured
             ]
             return max(scored, key=lambda item: item[0])[1]
@@ -270,25 +290,61 @@ class SourceAdapter:
                 candidates.append(value)
         return candidates
 
-    def _trim_detail_text(self, text: str) -> str:
-        for marker in ("职位描述", "岗位职责", "任职要求", "职位名称", "关于我们", "你将会做什么", "Job description", "Job Description", "Responsibilities", "Role description", "Requirements"):
-            index = text.find(marker)
-            if index >= 0:
-                text = text[index:]
-                break
-        for marker in ("立即投递 分享", "邀请好友", "隐私条款", "Powered by", "Privacy Policy", "CONTACT US", "services Talent Acquisition"):
-            index = text.find(marker)
-            if index >= 0:
-                text = text[:index]
+    def _trim_detail_text(self, text: str, *, preserve_leading: bool = False) -> str:
+        if not preserve_leading:
+            role_indexes = [
+                index
+                for marker in ROLE_CONTENT_ANCHORS
+                if (index := text.find(marker)) >= 0
+            ]
+            if role_indexes:
+                context_indexes = [
+                    index
+                    for marker in COMPANY_CONTEXT_ANCHORS
+                    if (index := text.find(marker)) >= 0
+                ]
+                text = text[min(role_indexes + context_indexes):]
+        end_indexes = [
+            index
+            for marker in DETAIL_END_MARKERS
+            if (index := text.find(marker)) >= 0
+        ]
+        if end_indexes:
+            text = text[:min(end_indexes)]
         return text.strip()
 
     def _score_detail_candidate(self, text: str) -> tuple[int, int]:
-        anchors = ("职位描述", "岗位职责", "任职要求", "职位名称", "关于我们", "你将会做什么", "Job description", "Job Description", "Responsibilities", "Role description", "Requirements")
         noise = ("CONTACT US", "Talent Acquisition", "Toggle navigation", "window.dataLayer", "self.__next_s")
         return (
-            sum(20 for anchor in anchors if anchor in text) - sum(15 for marker in noise if marker in text),
-            -len(text),
+            sum(30 for anchor in COMPANY_CONTEXT_ANCHORS if anchor in text)
+            + sum(20 for anchor in ROLE_CONTENT_ANCHORS if anchor in text)
+            - sum(15 for marker in noise if marker in text),
+            min(len(text), 8000),
         )
+
+    def _extract_company_description(self, text: str | None) -> str | None:
+        if not text:
+            return None
+        starts = [
+            (index, marker)
+            for marker in COMPANY_CONTEXT_ANCHORS
+            if (index := text.find(marker)) >= 0
+        ]
+        if not starts:
+            match = re.search(
+                r"((?:我们的客户|客户|该公司|本公司|我们)是一家.{8,500}?)(?=岗位职责|职位描述|任职要求|Responsibilities|Requirements|$)",
+                text,
+                re.IGNORECASE,
+            )
+            return match.group(1).strip()[:2000] if match else None
+        start, _ = min(starts, key=lambda item: item[0])
+        ends = [
+            index
+            for marker in ROLE_CONTENT_ANCHORS
+            if (index := text.find(marker, start + 1)) > start
+        ]
+        end = min(ends) if ends else min(len(text), start + 2000)
+        return text[start:end].strip()[:2000] or None
 
     def _looks_mojibake(self, value: str) -> bool:
         markers = ("�", "Ã", "Â", "æ", "å", "ç", "娴", "璐", "閿", "涓", "鍛", "缁", "鐞", "姹")
@@ -407,9 +463,55 @@ def _extract_json_ld_job_descriptions(html_text: str) -> list[str]:
                 descriptions.append(_html_fragment_to_text(fallback))
             continue
         for item in _iter_json_ld_items(payload):
-            if item.get("@type") == "JobPosting" and item.get("description"):
-                descriptions.append(_html_fragment_to_text(str(item["description"])))
+            item_type = item.get("@type")
+            if item_type == "JobPosting" or (isinstance(item_type, list) and "JobPosting" in item_type):
+                content = _json_ld_job_content(item)
+                if content:
+                    descriptions.append(content)
     return descriptions
+
+
+def _json_ld_job_content(item: dict) -> str:
+    organization = item.get("hiringOrganization")
+    company_description = None
+    if isinstance(organization, dict):
+        company_description = (
+            organization.get("description")
+            or organization.get("disambiguatingDescription")
+            or organization.get("slogan")
+        )
+    sections = (
+        ("公司介绍", company_description),
+        (None, item.get("description")),
+        ("岗位职责", item.get("responsibilities")),
+        ("任职要求", item.get("qualifications")),
+        ("技能要求", item.get("skills")),
+        ("职位福利", item.get("jobBenefits")),
+        ("激励计划", item.get("incentiveCompensation")),
+    )
+    parts: list[str] = []
+    normalized: list[str] = []
+    for label, value in sections:
+        cleaned = _json_ld_text(value)
+        if not cleaned or any(cleaned in existing for existing in normalized):
+            continue
+        keep = [index for index, existing in enumerate(normalized) if existing not in cleaned]
+        parts = [parts[index] for index in keep]
+        normalized = [normalized[index] for index in keep]
+        parts.append(f"{label}：{cleaned}" if label else cleaned)
+        normalized.append(cleaned)
+    return "\n".join(parts)[:8000]
+
+
+def _json_ld_text(value) -> str | None:
+    if isinstance(value, list):
+        values = [_json_ld_text(item) for item in value]
+        return "；".join(item for item in values if item) or None
+    if isinstance(value, dict):
+        value = value.get("description") or value.get("value") or value.get("name")
+    if value is None:
+        return None
+    return _html_fragment_to_text(str(value)) or None
 
 
 def _extract_json_ld_description_field(body: str) -> str | None:

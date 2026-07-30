@@ -3,7 +3,7 @@
 
 Filters local jobs to a configurable high-interest subset and runs the
 full hidden-employer inference pipeline using MiniMax M3 plus optional
-Metaso evidence search and post-verification.
+Metaso candidate generation and public-evidence verification.
 
 This module is a thin wrapper that:
 1. Filters jobs via subset rules.
@@ -11,7 +11,7 @@ This module is a thin wrapper that:
 3. Maps the v1 EmployerGuess to the AnalysisResult dataclass.
 4. Writes employer_guess + confidence back to the Feishu Bitable.
 
-Confidence threshold follows the existing daily digest threshold: 0.7.
+The daily digest treats the inference rubric's `high` band as >= 0.80.
 """
 from __future__ import annotations
 
@@ -92,7 +92,7 @@ AI_LEADERSHIP_KEYWORDS = [
 ]
 
 # Confidence threshold for "high confidence" in the daily digest
-HIGH_CONFIDENCE_THRESHOLD = 0.7
+HIGH_CONFIDENCE_THRESHOLD = 0.8
 
 
 @dataclass
@@ -219,7 +219,7 @@ def analyze_subset(
     Args:
         jobs: subset jobs (caller should pre-filter via filter_subset)
         minimax: MiniMaxClient-compatible object used by v1 inference.
-        metaso: MetasoClient for evidence search + post-verification.
+        metaso: MetasoClient for candidate generation and evidence verification.
             Pass None to skip evidence (--without-evidence mode).
     """
     if not jobs:

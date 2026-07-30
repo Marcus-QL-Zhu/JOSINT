@@ -108,7 +108,7 @@ def run_cron(
     """Run the full daily pipeline. Returns 0/1/2 (see module docstring).
 
     When m3_client is provided, step 3 runs the v1 inference pipeline
-    (analyze_jobs) with optional Metaso evidence + post-verification.
+    (analyze_jobs) with optional Metaso candidate generation and evidence verification.
     Pass metaso_client=None to skip evidence (--without-evidence mode).
 
     CLI flags:
@@ -219,7 +219,7 @@ def run_cron(
         pending_count = len(subset)
     else:
         # Delegate to v1 analyze_jobs so the scheduled path stays aligned
-        # with full inference + Metaso evidence + post-verification behavior.
+        # with full inference + Metaso candidate generation and evidence verification.
         analysis_results = analyze_subset(
             subset, minimax=m3_client, metaso=metaso_client,
         )
@@ -400,17 +400,18 @@ def _build_m3_client(env: dict[str, str]) -> Any | None:
     api_key = env.get("MINIMAX_API_KEY") or env.get("MINIMAX_REASONING_API_KEY")
     if not api_key:
         return None
-    base_url = env.get("MINIMAX_REASONING_BASE_URL", "https://api.minimaxi.com/v1")
+    base_url = env.get("MINIMAX_REASONING_BASE_URL", "https://api.minimaxi.com/v1/chat/completions")
     return MiniMaxClient(
         api_key=api_key,
         base_url=base_url,
         model=env.get("MINIMAX_REASONING_MODEL", "MiniMax-M3"),
+        timeout=int(env.get("MINIMAX_REASONING_TIMEOUT", "300")),
         stage="radar_cron",
     )
 
 
 def _build_metaso_client(env: dict[str, str]) -> Any | None:
-    """Build a MetasoClient for evidence search + post-verification.
+    """Build a MetasoClient for candidate generation and evidence verification.
 
     Returns None if METASO_API_KEY is missing (analysis will skip evidence).
     """
@@ -420,7 +421,8 @@ def _build_metaso_client(env: dict[str, str]) -> Any | None:
     return MetasoClient(
         api_key=api_key,
         base_url=env.get("METASO_BASE_URL", "https://metaso.cn"),
-        model="fast",
+        model=env.get("METASO_MODEL", "fast"),
+        timeout=int(env.get("METASO_TIMEOUT", "90")),
         stage="radar_cron",
     )
 
@@ -434,7 +436,7 @@ def main():
     ap.add_argument(
         "--without-evidence",
         action="store_true",
-        help="Skip Metaso evidence search + post-verification (M3 only). "
+        help="Skip Metaso candidate generation and evidence verification (M3 only). "
              "Default is WITH evidence (matches v1 analyze_jobs behavior).",
     )
     args = ap.parse_args()

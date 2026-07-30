@@ -20,13 +20,21 @@ log = logging.getLogger(__name__)
 # this budget, otherwise it is marked low-confidence and the run moves on.
 # This replaces a previous single global timeout that killed the whole run
 # after 15 minutes; a single slow job can never block the rest.
-PER_JOB_TIMEOUT_S = 300  # 5 minutes
+PER_JOB_TIMEOUT_S = 720  # Covers candidate generation, up to 3 checks, M3, and one repair.
+MAX_METASO_CANDIDATES = 3
+LOW_CONFIDENCE_MAX = 0.49
+HIGH_CONFIDENCE_MIN = 0.80
 
+M3_EMPLOYER_SYSTEM_PROMPT = """你是招聘情报中的隐藏雇主核验专家。你的任务是根据完整职位信息、Metaso 无偏候选、公开职位证据和关联岗位，判断最可能的实际雇主。
 
-PROPRIETARY_TERMS = {
-    "HOS": "Likely Honeywell Operating System; check Honeywell as candidate employer.",
-    "FDE": "Likely Forward Deployed Engineer; check Palantir as candidate employer.",
-}
+必须遵守：
+1. 先比较全部候选的支持证据和冲突证据，再给结论；不要围绕单一候选自证。
+2. 公司介绍、产品、专有技术、系统、型号、品牌、地点和高度相似公开 JD 的权重高于行业知名度。
+3. 深圳、3C、DTC、Shopify 等通用特征只能形成低置信度线索，不能单独支持知名公司猜测。
+4. 候选定向搜索只有在内容与职位或公司描述实质匹配时才算证据，搜索结果出现公司名本身不算验证。
+5. 证据不足时 guessed_employer 必须为 null；不要为了给答案而猜测。
+6. 只输出严格 JSON，所有自然语言字段使用简体中文。"""
+
 
 CLUSTER_TOKENS = (
     "german chemical company",
@@ -38,15 +46,6 @@ CLUSTER_TOKENS = (
     "德国化工",
     "具身智能",
 )
-
-
-def detect_proprietary_terms(job: JobRecord) -> list[dict[str, str]]:
-    text = f"{job.title}\n{job.list_excerpt or ''}\n{job.jd_text or job.detail_text or ''}"
-    evidence = []
-    for term, interpretation in PROPRIETARY_TERMS.items():
-        if re.search(rf"\b{re.escape(term)}\b", text, re.IGNORECASE):
-            evidence.append({"type": "proprietary_term", "text": term, "interpretation": interpretation})
-    return evidence
 
 
 def cluster_related_jobs(jobs: list[JobRecord]) -> dict[str, list[JobRecord]]:
@@ -199,44 +198,37 @@ def _analyze_one_job(
             search_queries=[],
             reasoning_summary="Employer inference skipped: missing JD/listing text content.",
         )
-    evidence = detect_proprietary_terms(job)
+    evidence: list[dict[str, Any]] = []
     external_sources: list[dict[str, Any]] = []
     search_queries: list[str] = []
+    metaso_candidates: list[dict[str, Any]] = []
     if metaso:
-        for query in _build_search_queries(job, evidence)[:5]:
-            search_queries.append(query)
-            try:
-                for page in metaso.search(query).get("webpages", [])[:3]:
-                    external_sources.append(
-                        {
-                            "title": page.get("title", ""),
-                            "url": page.get("link", ""),
-                            "summary": page.get("summary", ""),
-                        }
-                    )
-            except Exception as exc:
-                evidence.append({"type": "search_error", "text": str(exc)})
-    try:
-        payload = _call_reasoner(
-            job, clusters.get(job.id, []), evidence, external_sources, minimax,
-            stage="initial",
-        )
         try:
-            payload = _verify_candidate_with_public_jds(
+            metaso_candidates, candidate_answer, candidate_sources = _generate_metaso_candidates(
+                job, clusters.get(job.id, []), metaso,
+            )
+            evidence.append({
+                "type": "metaso_candidate_generation",
+                "text": candidate_answer[:12000],
+                "candidates": metaso_candidates,
+            })
+            external_sources.extend(candidate_sources)
+            _verify_metaso_candidates(
                 job=job,
-                payload=payload,
-                related_jobs=clusters.get(job.id, []),
+                candidates=metaso_candidates,
+                metaso=metaso,
                 evidence=evidence,
                 external_sources=external_sources,
                 search_queries=search_queries,
-                minimax=minimax,
-                metaso=metaso,
             )
         except Exception as exc:  # noqa: BLE001
-            evidence.append({"type": "candidate_verification_error", "text": str(exc)})
-            flags = list(payload.get("review_flags") or [])
-            flags.append(f"candidate verification failed: {exc}")
-            payload["review_flags"] = flags
+            evidence.append({"type": "metaso_candidate_generation_error", "text": str(exc)})
+    try:
+        payload = _call_reasoner(
+            job, clusters.get(job.id, []), evidence, external_sources, minimax,
+            stage="final_comparison",
+            metaso_candidates=metaso_candidates,
+        )
         return EmployerGuess(
             job_id=job.id,
             guessed_employer=payload.get("guessed_employer"),
@@ -264,71 +256,203 @@ def _analyze_one_job(
         )
 
 
-def _verify_candidate_with_public_jds(
+def _generate_metaso_candidates(
+    job: JobRecord,
+    related_jobs: list[JobRecord],
+    metaso: Any,
+) -> tuple[list[dict[str, Any]], str, list[dict[str, Any]]]:
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是隐藏雇主候选生成器。根据完整招聘广告和公开网络信息，无偏识别可能的实际雇主。"
+                "返回 0 至 3 个有证据支持的候选；证据只支持几个就返回几个，允许空数组，绝不能为凑满三个而添加弱候选。"
+                "不要因为公司知名、地点和行业相符就优先猜测。只返回严格 JSON。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "task": "分析这个岗位是给哪家公司招人，并提供不超过三个候选。",
+                    "job": _job_prompt_payload(job),
+                    "related_jobs": [_job_prompt_payload(item) for item in related_jobs[:3]],
+                    "schema": {
+                        "candidates": [
+                            {
+                                "name": "具体公司名称",
+                                "supporting_clues": ["支持证据"],
+                                "conflicting_clues": ["冲突或疑点"],
+                                "evidence_urls": ["公开证据链接"],
+                            }
+                        ],
+                        "summary": "简短说明；没有可靠候选时说明证据不足",
+                    },
+                },
+                ensure_ascii=False,
+            ),
+        },
+    ]
+    body = metaso.chat(messages, stream=False)
+    answer = _metaso_answer_text(body)
+    candidates = _parse_metaso_candidates(answer)
+    return candidates[:MAX_METASO_CANDIDATES], answer, _metaso_response_sources(body)
+
+
+def _verify_metaso_candidates(
     *,
     job: JobRecord,
-    payload: dict[str, Any],
-    related_jobs: list[JobRecord],
+    candidates: list[dict[str, Any]],
+    metaso: Any,
     evidence: list[dict[str, Any]],
     external_sources: list[dict[str, Any]],
     search_queries: list[str],
-    minimax: Any,
-    metaso: Any | None,
-) -> dict[str, Any]:
-    employer = payload.get("guessed_employer")
-    if not employer or not metaso:
-        return payload
-    query = _candidate_jd_query(employer, job)
-    search_queries.append(query)
-    try:
-        pages = metaso.search(query).get("webpages", [])[:5]
-    except Exception as exc:
-        evidence.append({"type": "candidate_jd_check_error", "text": str(exc)})
-        return payload
-    evidence.append(
-        {
+) -> None:
+    for candidate in candidates[:MAX_METASO_CANDIDATES]:
+        employer = str(candidate.get("name") or "").strip()
+        if not employer:
+            continue
+        query = _candidate_jd_query(employer, job)
+        search_queries.append(query)
+        try:
+            pages = metaso.search(query).get("webpages", [])[:5]
+        except Exception as exc:
+            evidence.append({
+                "type": "candidate_jd_check_error",
+                "candidate": employer,
+                "text": str(exc),
+            })
+            continue
+        evidence.append({
             "type": "candidate_jd_check",
+            "candidate": employer,
             "text": query,
-            "summary": f"Checked whether {employer} has similar public job ads for this role.",
-        }
-    )
-    for page in pages:
-        external_sources.append(
-            {
+            "summary": "核验候选公司是否存在相似公开职位或与匿名描述一致的公开信息。",
+        })
+        for page in pages:
+            external_sources.append({
+                "candidate": employer,
                 "title": page.get("title", ""),
                 "url": page.get("link", ""),
                 "summary": page.get("summary", ""),
-            }
-        )
-    return _call_reasoner(
-        job, related_jobs, evidence, external_sources, minimax,
-        stage="candidate_verification",
-    )
+            })
 
 
 def _candidate_jd_query(employer: str, job: JobRecord) -> str:
     parts = [employer, job.title]
     if job.location:
         parts.append(job.location)
-    parts.extend(["job", "JD"])
+    clue = _distinctive_search_clue(job)
+    if clue:
+        parts.append(f'"{clue[:80]}"')
+    parts.extend(["招聘", "职位"])
     return " ".join(part for part in parts if part)
 
 
-def _build_search_queries(job: JobRecord, evidence: list[dict[str, Any]]) -> list[str]:
-    queries = [f"{item['text']} employer company clue" for item in evidence[:3]]
-    text = f"{job.title} {job.location or ''} {job.list_excerpt or ''} {job.jd_text or job.detail_text or ''}".lower()
-    location = job.location or ""
-    if "german chemical company" in text:
-        queries.append(f"German chemical company {location} employer".strip())
-    if "embodied ai" in text or "具身智能" in text:
-        queries.append(f"embodied AI company {location} employer".strip())
-    if "semiconductor" in text:
-        queries.append(f"semiconductor company {location} employer".strip())
-    deduped: list[str] = []
-    for query in queries:
-        if query and query not in deduped:
-            deduped.append(query)
-    return deduped
+def _distinctive_search_clue(job: JobRecord) -> str | None:
+    preferred = job.company_description or ""
+    candidates = re.split(r"[。；;\n]", preferred)
+    if not any(12 <= len(item.strip()) <= 120 for item in candidates):
+        text = job.jd_text or job.detail_text or ""
+        candidates.extend(re.split(r"[。；;\n]", text))
+    markers = (
+        "总部", "专注", "闻名", "领先", "旗下", "核心技术", "产品型号", "自主品牌",
+        "headquartered", "specializes", "known for", "leading", "proprietary", "brand",
+    )
+    scored = []
+    for item in candidates:
+        cleaned = re.sub(r"\s+", " ", item).strip(" ：:")
+        if 12 <= len(cleaned) <= 120:
+            score = sum(3 for marker in markers if marker.lower() in cleaned.lower())
+            scored.append((score, len(cleaned), cleaned))
+    if not scored:
+        return None
+    return max(scored, key=lambda item: (item[0], item[1]))[2]
+
+
+def _job_prompt_payload(job: JobRecord) -> dict[str, Any]:
+    return {
+        "title": job.title,
+        "location": job.location,
+        "url": job.url,
+        "company_description": job.company_description or "",
+        "jd_text": job.jd_text or job.detail_text or "",
+        "list_excerpt": job.list_excerpt or "",
+    }
+
+
+def _metaso_answer_text(body: Any) -> str:
+    if isinstance(body, str):
+        return body.strip()
+    if not isinstance(body, dict):
+        return ""
+    if body.get("answer"):
+        return str(body["answer"]).strip()
+    choices = body.get("choices") or []
+    if choices and isinstance(choices[0], dict):
+        message = choices[0].get("message") or choices[0].get("delta") or {}
+        if isinstance(message, dict) and message.get("content"):
+            return str(message["content"]).strip()
+    return ""
+
+
+def _parse_metaso_candidates(answer: str) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    try:
+        payload = _parse_json_object(answer)
+    except (json.JSONDecodeError, TypeError):
+        payload = {}
+    raw_candidates = payload.get("candidates") if isinstance(payload, dict) else []
+    if isinstance(raw_candidates, list):
+        for item in raw_candidates:
+            if isinstance(item, str):
+                item = {"name": item}
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("company") or "").strip()
+            if name:
+                candidates.append({
+                    "name": name,
+                    "supporting_clues": item.get("supporting_clues") or [],
+                    "conflicting_clues": item.get("conflicting_clues") or [],
+                    "evidence_urls": item.get("evidence_urls") or [],
+                })
+    if not candidates and answer:
+        patterns = (
+            r"(?:最可能(?:的)?(?:公司|雇主)|实际雇主|公司名称)\s*[:：]\s*\**([^*\n，。；]{2,80})",
+            r"(?:职位|岗位).{0,12}?是为\s*\*\*([^*\n]{2,80})\*\*",
+        )
+        for pattern in patterns:
+            for match in re.finditer(pattern, answer, re.IGNORECASE):
+                name = match.group(1).strip(" *：:（）()")
+                if name and all(name != item["name"] for item in candidates):
+                    candidates.append({
+                        "name": name,
+                        "supporting_clues": [],
+                        "conflicting_clues": [],
+                        "evidence_urls": [],
+                    })
+                if len(candidates) >= MAX_METASO_CANDIDATES:
+                    break
+    return candidates[:MAX_METASO_CANDIDATES]
+
+
+def _metaso_response_sources(body: Any) -> list[dict[str, Any]]:
+    if not isinstance(body, dict):
+        return []
+    raw_sources = body.get("sources") or body.get("webpages") or body.get("references") or []
+    if not isinstance(raw_sources, list):
+        return []
+    sources = []
+    for item in raw_sources:
+        if not isinstance(item, dict):
+            continue
+        sources.append({
+            "title": item.get("title", ""),
+            "url": item.get("url") or item.get("link") or "",
+            "summary": item.get("summary") or item.get("snippet") or "",
+        })
+    return sources[:10]
 
 
 def _call_reasoner(
@@ -339,17 +463,27 @@ def _call_reasoner(
     minimax: Any,
     *,
     stage: str,
+    metaso_candidates: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    prompt = _build_reasoner_prompt(job, related_jobs, evidence, external_sources)
+    prompt = _build_reasoner_prompt(
+        job,
+        related_jobs,
+        evidence,
+        external_sources,
+        metaso_candidates=metaso_candidates,
+    )
     content = minimax.chat(
-        [{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
+        [
+            {"role": "system", "content": M3_EMPLOYER_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+        ],
         thinking_type="adaptive",
         reasoning_split=True,
         usage_context={"job_ids": [job.id], "batch_size": 1},
     )
     try:
         return _normalize_reasoner_payload(_parse_json_object(content))
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
         _write_inference_debug(
             job=job,
             stage=stage,
@@ -373,28 +507,37 @@ def _build_reasoner_prompt(
     related_jobs: list[JobRecord],
     evidence: list[dict[str, Any]],
     external_sources: list[dict[str, Any]],
+    *,
+    metaso_candidates: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
-        "task": "推断这条猎头职位广告背后的隐藏雇主公司。只返回严格 JSON，不要返回 Markdown。",
+        "task": "比较全部候选及证据，推断这条猎头职位广告背后的隐藏雇主公司。只返回严格 JSON，不要返回 Markdown。",
         "language_requirement": "所有自然语言字段必须使用简体中文；JSON key 保持英文。reasoning_summary 和 review_flags 必须是中文。",
-        "job": {
-            "title": job.title,
-            "location": job.location,
-            "url": job.url,
-            "jd_text": job.jd_text or job.detail_text or "",
-            "list_excerpt": job.list_excerpt or "",
-            "company_description": job.company_description or "",
-        },
+        "job": _job_prompt_payload(job),
         "related_jobs": [
-            {"title": related.title, "location": related.location, "jd_text": related.jd_text or related.detail_text or "", "list_excerpt": related.list_excerpt or ""}
+            _job_prompt_payload(related)
             for related in related_jobs[:5]
         ],
+        "metaso_candidates": metaso_candidates or [],
         "evidence": evidence,
         "external_sources": external_sources,
+        "decision_method": [
+            "先比较所有候选的支持证据与冲突证据，不得围绕单一候选自证。",
+            "公司介绍、产品、专有技术或型号、品牌和高度相似公开 JD 属于强证据。",
+            "候选定向搜索只有在搜索结果内容与本职位实质相似时才构成验证。",
+            "证据不足时返回 null；Metaso 没有候选不代表必须猜测。",
+        ],
+        "confidence_rules": {
+            "high": "0.80-1.00：公司介绍或独特产品/技术直接吻合，并有独立公开证据或高度相似公开 JD 交叉验证。",
+            "medium": "0.50-0.79：有多个相互独立的具体线索指向同一公司，但仍存在合理替代候选或公开验证不完整。",
+            "low": "0.00-0.49：仅有地点、宽泛行业、渠道或常见技术栈等通用画像，或者证据不足、冲突明显。",
+            "generic_signal_cap": "仅凭深圳 + 3C + DTC/Shopify 等通用线索时，confidence_basis 必须为 generic_profile_only，confidence_score 不得超过 0.49。",
+        },
         "schema": {
             "guessed_employer": "string or null",
             "confidence": "high|medium|low",
             "confidence_score": "number between 0 and 1",
+            "confidence_basis": "direct_description_match|near_duplicate_public_jd|multiple_specific_clues|generic_profile_only|insufficient_evidence",
             "reasoning_summary": "中文，简短说明证据链，以及为什么支持或不支持该雇主猜测",
             "review_flags": ["中文，列出仍需人工复核的疑点"],
         },
@@ -407,7 +550,7 @@ def _repair_reasoner_json(
     stage: str,
     prompt_payload: dict[str, Any],
     raw_response: str,
-    parse_error: json.JSONDecodeError,
+    parse_error: Exception,
     minimax: Any,
 ) -> dict[str, Any]:
     repair_prompt = {
@@ -432,7 +575,7 @@ def _repair_reasoner_json(
     )
     try:
         return _parse_json_object(content)
-    except json.JSONDecodeError as repair_error:
+    except (json.JSONDecodeError, TypeError, ValueError) as repair_error:
         _write_inference_debug(
             job=job,
             stage=f"{stage}_repair_failed",
@@ -446,13 +589,16 @@ def _repair_reasoner_json(
 def _parse_json_object(content: str) -> dict[str, Any]:
     content = _strip_json_fence(content.strip())
     try:
-        return json.loads(content)
+        payload = json.loads(content)
     except json.JSONDecodeError:
         candidate = _extract_balanced_json_object(content)
         if candidate is None:
             raise
         candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
-        return json.loads(candidate)
+        payload = json.loads(candidate)
+    if not isinstance(payload, dict):
+        raise TypeError(f"Reasoner response must be a JSON object, got {type(payload).__name__}")
+    return payload
 
 
 def _strip_json_fence(content: str) -> str:
@@ -490,15 +636,39 @@ def _extract_balanced_json_object(content: str) -> str | None:
 
 def _normalize_reasoner_payload(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(payload)
-    confidence = normalized.get("confidence") or "low"
-    if confidence not in {"high", "medium", "low"}:
-        confidence = "low"
-    normalized["confidence"] = confidence
     try:
         score = float(normalized.get("confidence_score") or 0.0)
     except (TypeError, ValueError):
         score = 0.0
-    normalized["confidence_score"] = max(0.0, min(1.0, score))
+    score = max(0.0, min(1.0, score))
+    raw_basis = normalized.get("confidence_basis")
+    basis = str(raw_basis) if raw_basis else "legacy_unspecified"
+    allowed_bases = {
+        "direct_description_match",
+        "near_duplicate_public_jd",
+        "multiple_specific_clues",
+        "generic_profile_only",
+        "insufficient_evidence",
+        "legacy_unspecified",
+    }
+    if basis not in allowed_bases:
+        basis = "legacy_unspecified"
+    employer = normalized.get("guessed_employer")
+    if not employer:
+        employer = None
+        basis = "insufficient_evidence"
+        score = 0.0
+    elif basis in {"generic_profile_only", "insufficient_evidence"}:
+        score = min(score, LOW_CONFIDENCE_MAX)
+    normalized["guessed_employer"] = employer
+    normalized["confidence_basis"] = basis
+    normalized["confidence_score"] = score
+    if score >= HIGH_CONFIDENCE_MIN:
+        normalized["confidence"] = "high"
+    elif score > LOW_CONFIDENCE_MAX:
+        normalized["confidence"] = "medium"
+    else:
+        normalized["confidence"] = "low"
     flags = normalized.get("review_flags") or []
     if isinstance(flags, str):
         flags = [flags]
@@ -506,8 +676,6 @@ def _normalize_reasoner_payload(payload: dict[str, Any]) -> dict[str, Any]:
         flags = [str(flags)]
     normalized["review_flags"] = [str(flag) for flag in flags]
     normalized["reasoning_summary"] = str(normalized.get("reasoning_summary") or "")
-    if "guessed_employer" not in normalized:
-        normalized["guessed_employer"] = None
     return normalized
 
 

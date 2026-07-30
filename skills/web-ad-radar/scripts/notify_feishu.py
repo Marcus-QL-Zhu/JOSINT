@@ -83,7 +83,7 @@ def format_daily_summary(
         "",
         "**\u5b50\u96c6\u5206\u6790**: \u7ba1\u7406\u5c42/\u9ad8\u7aef\u5c97\u4f4d\uff0c\u4e14\u805a\u7126\u673a\u5668\u4eba/\u534a\u5bfc\u4f53/AI/\u6d88\u8d39\u7535\u5b50\u7b49\u6280\u672f\u65b9\u5411\u7684\u4e1a\u52a1\u6761\u7ebf\uff08\u542b AI \u843d\u5730\u8d1f\u8d23\u4eba\u4f8b\u5916\uff09",
         f"- 命中子集: **{len(high_confidence) + low_confidence_count + pending_count}**",
-        f"- 高置信度 (>=0.7): **{len(high_confidence)}**",
+        f"- 高置信度 (>=0.8): **{len(high_confidence)}**",
         f"- 低置信度: **{low_confidence_count}**",
         f"- 分析失败/跳过: **{pending_count}**",
         "",

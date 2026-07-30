@@ -95,6 +95,9 @@ class AggregatorSafetyTest(unittest.TestCase):
                     "description": "负责半导体芯片研发与工程团队。",
                     "hiringOrganization": {"name": "测试芯片有限公司"},
                     "jobLocation": {"address": {"addressLocality": "上海"}},
+                    "responsibilities": "Lead advanced packaging architecture.",
+                    "qualifications": "Ten years of semiconductor experience.",
+                    "jobBenefits": "Equity incentive plan.",
                     "identifier": {"value": "abc123"},
                 }, ensure_ascii=False)
                 + f"</script> 来源 BOSS直聘 {upstream_url}"
@@ -106,6 +109,8 @@ class AggregatorSafetyTest(unittest.TestCase):
         self.assertEqual(1, len(jobs))
         self.assertEqual("boss", jobs[0].upstream_source)
         self.assertNotIn(upstream_url, calls)
+        self.assertIn("advanced packaging architecture", jobs[0].jd_text)
+        self.assertIn("Equity incentive plan", jobs[0].jd_text)
 
     def test_talent_search_url_is_first_page_in_china(self):
         adapter = TalentChinaAdapter(fetch=lambda _: "")

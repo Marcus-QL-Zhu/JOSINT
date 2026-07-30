@@ -97,9 +97,15 @@ class ApiClientTest(unittest.TestCase):
         self.assertEqual(client.search("OpenAI")["total"], 1)
         self.assertEqual(client.read("https://example.com")["markdown"], "# Page")
         self.assertEqual(client.ask_simple("question")["answer"], "A")
+        self.assertEqual(client.chat([{"role": "user", "content": "question"}], stream=False)["answer"], "A")
         self.assertEqual(calls[0]["json"], {"q": "OpenAI", "scope": "webpage", "includeSummary": True, "conciseSnippet": True})
         self.assertEqual(calls[1]["json"], {"url": "https://example.com"})
         self.assertEqual(calls[2]["json"], {"q": "question", "model": "fast", "format": "simple"})
+        self.assertEqual(calls[3]["json"], {
+            "messages": [{"role": "user", "content": "question"}],
+            "model": "fast",
+            "stream": False,
+        })
 
     def test_bitable_list_all_records_uses_query_pagination(self):
         client = BitableClient("app", "secret", "base", "table")

@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from radar.inference import analyze_jobs, cluster_related_jobs, detect_proprietary_terms
+from radar.inference import analyze_jobs, cluster_related_jobs
 from radar.models import JobRecord
 
 
@@ -29,29 +29,23 @@ class SequenceMiniMax:
 
 
 class FakeMetaso:
-    def __init__(self):
+    def __init__(self, candidates=None):
         self.queries = []
+        self.chat_calls = []
+        self.candidates = [{"name": "ExampleCorp", "supporting_clues": ["specific match"]}] if candidates is None else candidates
+
+    def chat(self, messages, stream=False):
+        self.chat_calls.append({"messages": messages, "stream": stream})
+        return {
+            "choices": [{"message": {"content": json.dumps({"candidates": self.candidates}, ensure_ascii=False)}}],
+        }
 
     def search(self, q):
         self.queries.append(q)
-        return {"webpages": [{"title": "Honeywell Operating System", "link": "https://example.com/hos", "summary": "HOS is used by Honeywell."}]}
+        return {"webpages": [{"title": "Public employer job", "link": "https://example.com/job", "summary": "A similar public role."}]}
 
 
 class InferenceTest(unittest.TestCase):
-    def test_detect_proprietary_terms_finds_known_company_clues(self):
-        job = JobRecord(
-            source_slug="randstad",
-            source_name="Randstad China",
-            title="Operations Manager",
-            url="https://example.com/job",
-            detail_text="Lead HOS deployment and continuous improvement.",
-        )
-
-        terms = detect_proprietary_terms(job)
-
-        self.assertEqual(terms[0]["text"], "HOS")
-        self.assertIn("Honeywell", terms[0]["interpretation"])
-
     def test_cluster_related_jobs_uses_shared_description_tokens(self):
         jobs = [
             JobRecord("randstad", "Randstad China", "Finance Director", "https://e/1", location="Shanghai", detail_text="German chemical company in Shanghai"),
@@ -71,9 +65,9 @@ class InferenceTest(unittest.TestCase):
             "Randstad China",
             "Operations Manager",
             "https://e/1",
-            detail_text="Lead HOS deployment.",
+            detail_text="Lead an internal operating-system transformation.",
         )
-        minimax = FakeMiniMax(json.dumps({"guessed_employer": "Honeywell", "confidence": "high", "confidence_score": 0.91, "reasoning_summary": "HOS clue."}))
+        minimax = FakeMiniMax(json.dumps({"guessed_employer": "ExampleCorp", "confidence": "high", "confidence_score": 0.91, "confidence_basis": "near_duplicate_public_jd", "reasoning_summary": "公开证据吻合。"}, ensure_ascii=False))
 
         metaso = FakeMetaso()
         with tempfile.TemporaryDirectory() as tmp:
@@ -87,9 +81,9 @@ class InferenceTest(unittest.TestCase):
                 else:
                     os.environ["JOSINT_INFERENCE_DEBUG_DIR"] = old
 
-        self.assertEqual(guesses[job.id].guessed_employer, "Honeywell")
+        self.assertEqual(guesses[job.id].guessed_employer, "ExampleCorp")
         self.assertEqual(guesses[job.id].confidence, "high")
-        self.assertEqual(guesses[job.id].evidence[0]["text"], "HOS")
+        self.assertFalse(any(item["type"] == "proprietary_term" for item in guesses[job.id].evidence))
         self.assertTrue(metaso.queries)
         self.assertTrue(minimax.calls[0]["kwargs"]["reasoning_split"])
 
@@ -102,12 +96,13 @@ class InferenceTest(unittest.TestCase):
             location="Shanghai",
             detail_text="German chemical company in Shanghai seeking finance leadership.",
         )
-        minimax = FakeMiniMax(json.dumps({"guessed_employer": None, "confidence": "low", "confidence_score": 0.1, "reasoning_summary": "Generic clue."}))
+        minimax = FakeMiniMax(json.dumps({"guessed_employer": None, "confidence": "low", "confidence_score": 0.1, "confidence_basis": "insufficient_evidence", "reasoning_summary": "线索过于宽泛。"}, ensure_ascii=False))
         metaso = FakeMetaso()
 
         analyze_jobs([job], minimax=minimax, metaso=metaso)
 
-        self.assertIn("German chemical company Shanghai employer", metaso.queries)
+        candidate_prompt = metaso.chat_calls[0]["messages"][1]["content"]
+        self.assertIn("German chemical company in Shanghai", candidate_prompt)
 
     def test_analyze_jobs_verifies_candidate_employer_has_similar_public_jd(self):
         job = JobRecord(
@@ -116,20 +111,21 @@ class InferenceTest(unittest.TestCase):
             "Operations Manager",
             "https://e/1",
             location="Shanghai",
-            detail_text="Lead HOS deployment and lean manufacturing transformation.",
+            detail_text="Lead a proprietary platform and lean manufacturing transformation.",
         )
-        minimax = SequenceMiniMax(
-            [
-                json.dumps({"guessed_employer": "Honeywell", "confidence": "medium", "confidence_score": 0.7, "reasoning_summary": "HOS clue."}),
-                json.dumps({"guessed_employer": "Honeywell", "confidence": "high", "confidence_score": 0.88, "reasoning_summary": "Candidate employer has similar public JD."}),
-            ]
-        )
+        minimax = FakeMiniMax(json.dumps({
+            "guessed_employer": "ExampleCorp",
+            "confidence": "high",
+            "confidence_score": 0.88,
+            "confidence_basis": "near_duplicate_public_jd",
+            "reasoning_summary": "候选雇主存在相似公开职位。",
+        }, ensure_ascii=False))
         metaso = FakeMetaso()
 
         guesses = analyze_jobs([job], minimax=minimax, metaso=metaso)
 
-        self.assertIn("Honeywell Operations Manager Shanghai job JD", metaso.queries)
-        self.assertEqual(len(minimax.calls), 2)
+        self.assertTrue(any(query.startswith("ExampleCorp Operations Manager Shanghai") for query in metaso.queries))
+        self.assertEqual(len(minimax.calls), 1)
         self.assertEqual(guesses[job.id].confidence, "high")
         self.assertTrue(any(item["type"] == "candidate_jd_check" for item in guesses[job.id].evidence))
 
@@ -141,11 +137,14 @@ class InferenceTest(unittest.TestCase):
             "https://e/1",
             detail_text="Anonymous industrial company.",
         )
-        minimax = FakeMiniMax(json.dumps({"guessed_employer": None, "confidence": "low", "confidence_score": 0.1, "reasoning_summary": "证据不足。"}))
+        minimax = FakeMiniMax(json.dumps({"guessed_employer": None, "confidence": "low", "confidence_score": 0.1, "confidence_basis": "insufficient_evidence", "reasoning_summary": "证据不足。"}))
 
         analyze_jobs([job], minimax=minimax, metaso=None)
 
-        prompt = minimax.calls[0]["messages"][0]["content"]
+        messages = minimax.calls[0]["messages"]
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertIn("深圳、3C、DTC", messages[0]["content"])
+        prompt = messages[1]["content"]
         self.assertIn("所有自然语言字段必须使用简体中文", prompt)
         self.assertIn("reasoning_summary", prompt)
         self.assertIn("review_flags", prompt)
@@ -180,6 +179,7 @@ class InferenceTest(unittest.TestCase):
                     "guessed_employer": "StepFun",
                     "confidence": "high",
                     "confidence_score": 0.82,
+                    "confidence_basis": "multiple_specific_clues",
                     "reasoning_summary": "修复后的 JSON。",
                     "review_flags": [],
                 }, ensure_ascii=False),
@@ -205,7 +205,7 @@ class InferenceTest(unittest.TestCase):
         self.assertIn("不要重新推理", repair_prompt)
         self.assertTrue(debug_files)
 
-    def test_invalid_verification_json_preserves_initial_candidate(self):
+    def test_metaso_accepts_fewer_than_three_candidates_without_padding(self):
         job = JobRecord(
             "morgan-philips",
             "Morgan Philips Mainland China",
@@ -214,26 +214,87 @@ class InferenceTest(unittest.TestCase):
             location="Shanghai",
             detail_text="AI solutions commercial leadership role.",
         )
-        minimax = SequenceMiniMax(
-            [
-                json.dumps({
-                    "guessed_employer": "StepFun",
-                    "confidence": "medium",
-                    "confidence_score": 0.7,
-                    "reasoning_summary": "第一轮候选。",
-                    "review_flags": [],
-                }, ensure_ascii=False),
-                '{"guessed_employer": "StepFun" "confidence": "high"}',
-                "still not json",
-            ]
-        )
-        metaso = FakeMetaso()
+        minimax = FakeMiniMax(json.dumps({
+            "guessed_employer": "StepFun",
+            "confidence": "medium",
+            "confidence_score": 0.7,
+            "confidence_basis": "multiple_specific_clues",
+            "reasoning_summary": "候选得到多条具体线索支持。",
+            "review_flags": [],
+        }, ensure_ascii=False))
+        metaso = FakeMetaso(candidates=[{"name": "StepFun", "supporting_clues": ["AI 产品线索"]}])
 
         guesses = analyze_jobs([job], minimax=minimax, metaso=metaso)
 
         self.assertEqual(guesses[job.id].guessed_employer, "StepFun")
         self.assertEqual(guesses[job.id].confidence, "medium")
+        self.assertEqual(len(metaso.queries), 1)
         self.assertTrue(any(item["type"] == "candidate_jd_check" for item in guesses[job.id].evidence))
-        self.assertTrue(any("candidate verification" in flag.lower() for flag in guesses[job.id].review_flags))
+
+    def test_metaso_empty_candidates_still_runs_reasoner_without_search(self):
+        job = JobRecord("morgan-philips", "Morgan Philips", "AI Director", "https://e/2", detail_text="Confidential AI leadership role.")
+        minimax = FakeMiniMax(json.dumps({
+            "guessed_employer": None,
+            "confidence": "low",
+            "confidence_score": 0.0,
+            "confidence_basis": "insufficient_evidence",
+            "reasoning_summary": "没有可靠候选。",
+        }, ensure_ascii=False))
+        metaso = FakeMetaso(candidates=[])
+
+        guesses = analyze_jobs([job], minimax=minimax, metaso=metaso)
+
+        self.assertIsNone(guesses[job.id].guessed_employer)
+        self.assertEqual(metaso.queries, [])
+        prompt = json.loads(minimax.calls[0]["messages"][1]["content"])
+        self.assertEqual(prompt["metaso_candidates"], [])
+
+    def test_generic_profile_only_is_capped_at_low_confidence(self):
+        job = JobRecord("randstad", "Randstad China", "Ecommerce Director", "https://e/3", detail_text="深圳 3C DTC Shopify company.")
+        minimax = FakeMiniMax(json.dumps({
+            "guessed_employer": "Anker Innovations",
+            "confidence": "high",
+            "confidence_score": 0.95,
+            "confidence_basis": "generic_profile_only",
+            "reasoning_summary": "仅有通用画像。",
+        }, ensure_ascii=False))
+
+        guesses = analyze_jobs([job], minimax=minimax, metaso=None)
+
+        self.assertEqual(guesses[job.id].confidence, "low")
+        self.assertEqual(guesses[job.id].confidence_score, 0.49)
+
+    def test_legacy_response_without_confidence_basis_preserves_score(self):
+        job = JobRecord("randstad", "Randstad China", "R&D Director", "https://e/4", detail_text="Distinctive product and public JD match.")
+        minimax = FakeMiniMax(json.dumps({
+            "guessed_employer": "LegacyCorp",
+            "confidence": "high",
+            "confidence_score": 0.9,
+            "reasoning_summary": "旧版模型响应。",
+        }, ensure_ascii=False))
+
+        guesses = analyze_jobs([job], minimax=minimax, metaso=None)
+
+        self.assertEqual(guesses[job.id].confidence, "high")
+        self.assertEqual(guesses[job.id].confidence_score, 0.9)
+
+    def test_valid_json_with_wrong_top_level_shape_triggers_repair(self):
+        job = JobRecord("randstad", "Randstad China", "Sales Director", "https://e/5", detail_text="Distinctive client description.")
+        minimax = SequenceMiniMax([
+            "[]",
+            json.dumps({
+                "guessed_employer": None,
+                "confidence": "low",
+                "confidence_score": 0.0,
+                "confidence_basis": "insufficient_evidence",
+                "reasoning_summary": "证据不足。",
+                "review_flags": [],
+            }, ensure_ascii=False),
+        ])
+
+        guesses = analyze_jobs([job], minimax=minimax, metaso=None)
+
+        self.assertIsNone(guesses[job.id].guessed_employer)
+        self.assertEqual(len(minimax.calls), 2)
 if __name__ == "__main__":
     unittest.main()

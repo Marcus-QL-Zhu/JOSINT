@@ -10,6 +10,17 @@ from .base import SourceAdapter, _quote_url
 from ..models import JobRecord
 
 
+def _merge_text_parts(*values: str | None) -> str | None:
+    parts: list[str] = []
+    for value in values:
+        cleaned = re.sub(r"\s+", " ", value or "").strip()
+        if not cleaned or any(cleaned in existing for existing in parts):
+            continue
+        parts = [existing for existing in parts if existing not in cleaned]
+        parts.append(cleaned)
+    return "\n".join(parts)[:8000] or None
+
+
 class RobertWaltersAdapter(SourceAdapter):
     slug = "robert-walters"
     name = "Robert Walters China"
@@ -45,7 +56,13 @@ class RobertHalfAdapter(SourceAdapter):
             candidate = re.sub(r"<[^>]+>", " ", candidate)
             cleaned = re.sub(r"\s+", " ", candidate).strip()
             if cleaned:
-                return cleaned[:8000]
+                page_text = self._clean_text(detail_html)
+                company_description = self._extract_company_description(page_text)
+                structured = [
+                    self._trim_detail_text(self._clean_text(value), preserve_leading=True)
+                    for value in self._extract_detail_candidates(detail_html)
+                ]
+                return _merge_text_parts(company_description, *structured, cleaned)
         return super()._fetch_detail_text(url)
     include_url_patterns = ("/cn/en/job/", "/jobs/")
     max_pages = 3
@@ -154,7 +171,12 @@ class RisfondAdapter(SourceAdapter):
                 if not job_id:
                     continue
                 url = f"https://www.risfond.com/job/job-{job_id}"
-                jd_text = self._fetch_detail_text(url)
+                client_intro = self._clean_text(str(item.get("ClientIntroduction") or "")) or None
+                detail_text = self._fetch_detail_text(url)
+                jd_text = _merge_text_parts(
+                    f"客户介绍：{client_intro}" if client_intro else None,
+                    detail_text,
+                )
                 jobs.append(
                     JobRecord(
                         source_slug=self.slug,
@@ -166,9 +188,10 @@ class RisfondAdapter(SourceAdapter):
                         published_at=published_at,
                         first_seen_at=run_date,
                         last_seen_at=run_date,
-                        list_excerpt=self._clean_text(str(item.get("ClientIntroduction") or ""))[:500],
+                        list_excerpt=(client_intro or "")[:500],
                         detail_text=jd_text,
                         jd_text=jd_text,
+                        company_description=client_intro,
                         raw_title=self._clean_text(str(item.get("Title") or "")),
                         raw={"source_start_url": self.start_url, "raw": item},
                     )

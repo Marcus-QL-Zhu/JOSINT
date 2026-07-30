@@ -119,7 +119,14 @@ def _build_metaso_client(env: dict[str, str], usage_logger: ApiUsageLogger | Non
     key = env.get("METASO_API_KEY")
     if not key:
         return None
-    return MetasoClient(api_key=key, base_url=env.get("METASO_BASE_URL", "https://metaso.cn"), model=env.get("METASO_MODEL", "fast"), usage_logger=usage_logger, stage="metaso_search")
+    return MetasoClient(
+        api_key=key,
+        base_url=env.get("METASO_BASE_URL", "https://metaso.cn"),
+        model=env.get("METASO_MODEL", "fast"),
+        timeout=int(env.get("METASO_TIMEOUT", "90")),
+        usage_logger=usage_logger,
+        stage="metaso_search",
+    )
 
 
 def _sample_jobs(companies: list[str], run_date: str) -> list[JobRecord]:

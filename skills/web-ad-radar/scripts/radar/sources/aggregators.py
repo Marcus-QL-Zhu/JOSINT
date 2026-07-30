@@ -78,8 +78,10 @@ class AggregatorAdapter(SourceAdapter):
         if not title:
             return None
         company = _company_name(posting.get("hiringOrganization")) or _context_company(context)
+        company_description = _company_description(posting.get("hiringOrganization"))
         location = _location(posting.get("jobLocation")) or self._extract_location(context)
-        jd_text = _html_fragment_to_text(str(posting.get("description") or "")) or self._clean_detail_text(detail_html)
+        fallback_text = self._clean_detail_text(detail_html)
+        jd_text = _job_posting_content(posting, company_description, fallback_text)
         identifier = posting.get("identifier")
         source_job_id = _identifier_value(identifier) or _job_id_from_url(url)
         full_text = f"{context}\n{detail_html}"
@@ -104,6 +106,7 @@ class AggregatorAdapter(SourceAdapter):
             list_excerpt=self._clean_text(context)[:500],
             detail_text=jd_text[:8000] if jd_text else None,
             jd_text=jd_text[:8000] if jd_text else None,
+            company_description=company_description,
             upstream_source=upstream_source,
             upstream_url=upstream_url,
             upstream_job_id=upstream_job_id,
@@ -166,6 +169,56 @@ def _text_value(value) -> str | None:
 
 def _company_name(value) -> str | None:
     return _text_value(value)
+
+
+def _company_description(value) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    return _rich_text_value(
+        value.get("description")
+        or value.get("disambiguatingDescription")
+        or value.get("slogan")
+    )
+
+
+def _job_posting_content(
+    posting: dict,
+    company_description: str | None,
+    fallback_text: str,
+) -> str:
+    sections = [
+        ("公司介绍", company_description),
+        (None, _rich_text_value(posting.get("description"))),
+        ("岗位职责", _rich_text_value(posting.get("responsibilities"))),
+        ("任职要求", _rich_text_value(posting.get("qualifications"))),
+        ("技能要求", _rich_text_value(posting.get("skills"))),
+        ("职位福利", _rich_text_value(posting.get("jobBenefits"))),
+    ]
+    parts: list[str] = []
+    normalized_parts: list[str] = []
+    for label, value in sections:
+        cleaned = re.sub(r"\s+", " ", value or "").strip()
+        if not cleaned or any(cleaned in existing for existing in normalized_parts):
+            continue
+        keep = [index for index, existing in enumerate(normalized_parts) if existing not in cleaned]
+        parts = [parts[index] for index in keep]
+        normalized_parts = [normalized_parts[index] for index in keep]
+        parts.append(f"{label}：{cleaned}" if label else cleaned)
+        normalized_parts.append(cleaned)
+    if not parts and fallback_text:
+        parts.append(fallback_text)
+    return "\n".join(parts)[:8000]
+
+
+def _rich_text_value(value) -> str | None:
+    if isinstance(value, list):
+        items = [_rich_text_value(item) for item in value]
+        return "\n".join(item for item in items if item) or None
+    if isinstance(value, dict):
+        value = value.get("description") or value.get("value") or value.get("name")
+    if value is None:
+        return None
+    return _html_fragment_to_text(str(value)) or None
 
 
 def _context_company(value: str) -> str | None:

@@ -77,7 +77,9 @@ METASO_BASE_URL=https://metaso.cn
 METASO_MODEL=fast
 ```
 
-During employer inference, the runner first gathers Metaso evidence from proprietary terms and company-description clues, then asks MiniMax-M3 for a candidate employer. If MiniMax-M3 returns a candidate employer, the runner searches Metaso again for `candidate employer + job title + location + job JD` to check whether the employer has a similar public job advertisement online, then sends that evidence back to MiniMax-M3 for a final confidence update.
+During employer inference, Metaso chat first generates zero to three evidence-backed employer candidates from the complete job content and related jobs. Fewer than three candidates, including an empty list, are valid and are never padded. The runner then searches each returned candidate with the role and a distinctive job clue to look for a substantively similar public job advertisement or company description. MiniMax-M3 compares all candidates, supporting and conflicting evidence, and related jobs in one final reasoning call.
+
+Confidence is evidence-based rather than an analysis gate. Direct company-description matches, unique products or technologies, and near-duplicate public JDs support higher scores. Generic profile signals such as `Shenzhen + 3C + DTC/Shopify` remain low confidence even when they resemble a well-known company. The skill keeps compact reasoning evidence in its normal output; it does not create a separate full audit trail.
 
 ## References
 
