@@ -110,6 +110,7 @@ class AnalysisResult:
     search_queries: list[str] = field(default_factory=list)
     cross_job_links: list[str] = field(default_factory=list)
     is_high_confidence: bool = False
+    evidence: list[dict] = field(default_factory=list)
 
     @classmethod
     def from_v1_guess(cls, guess: EmployerGuess, job: JobRecord) -> "AnalysisResult":
@@ -125,10 +126,22 @@ class AnalysisResult:
             confidence_score=score,
             reasoning=guess.reasoning_summary or "",
             review_flags=list(guess.review_flags or []),
+            evidence=list(guess.evidence or []),
             external_sources=list(guess.external_sources or []),
             search_queries=list(guess.search_queries or []),
             cross_job_links=list(guess.cross_job_links or []),
             is_high_confidence=score >= HIGH_CONFIDENCE_THRESHOLD,
+        )
+
+    def is_retryable_failure(self) -> bool:
+        retryable_prefixes = (
+            "per_job_timeout:",
+            "per_job_exception:",
+            "Inference API failed:",
+        )
+        return self.guessed_employer is None and any(
+            str(flag).startswith(retryable_prefixes)
+            for flag in self.review_flags
         )
 
 
@@ -294,6 +307,7 @@ def write_back_to_bitable(
                 "reasoning_summary": _truncate_text(r.reasoning),
                 "review_flags_json": _json_field(r.review_flags),
                 "evidence_json": _json_field({
+                    "inference_evidence": r.evidence,
                     "external_sources": r.external_sources,
                     "search_queries": r.search_queries,
                     "cross_job_links": r.cross_job_links,

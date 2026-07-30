@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 # this budget, otherwise it is marked low-confidence and the run moves on.
 # This replaces a previous single global timeout that killed the whole run
 # after 15 minutes; a single slow job can never block the rest.
-PER_JOB_TIMEOUT_S = 720  # Covers candidate generation, up to 3 checks, M3, and one repair.
+PER_JOB_TIMEOUT_S = 1080  # Covers 4 Metaso calls, M3, one repair, and scheduling margin.
 MAX_METASO_CANDIDATES = 3
 LOW_CONFIDENCE_MAX = 0.49
 HIGH_CONFIDENCE_MIN = 0.80
@@ -209,7 +209,7 @@ def _analyze_one_job(
             )
             evidence.append({
                 "type": "metaso_candidate_generation",
-                "text": candidate_answer[:12000],
+                "text": candidate_answer[:1000],
                 "candidates": metaso_candidates,
             })
             external_sources.extend(candidate_sources)

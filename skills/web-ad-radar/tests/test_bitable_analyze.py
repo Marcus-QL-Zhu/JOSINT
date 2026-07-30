@@ -38,6 +38,7 @@ class BitableAnalyzeWriteBackTest(unittest.TestCase):
             confidence_score=0.91,
             reasoning="Evidence chain summary",
             review_flags=["needs human review"],
+            evidence=[{"type": "metaso_candidate_generation", "candidates": [{"name": "ExampleAI"}]}],
             external_sources=[{"title": "source", "url": "https://source"}],
             search_queries=["ExampleAI job JD"],
             cross_job_links=["source:2"],
@@ -58,6 +59,7 @@ class BitableAnalyzeWriteBackTest(unittest.TestCase):
         self.assertEqual(json.loads(fields["review_flags_json"]), ["needs human review"])
         self.assertEqual(json.loads(fields["search_queries_json"]), ["ExampleAI job JD"])
         self.assertEqual(json.loads(fields["external_sources_json"])[0]["title"], "source")
+        self.assertEqual(json.loads(fields["evidence_json"])["inference_evidence"][0]["type"], "metaso_candidate_generation")
 
 
 class BitableAnalyzeSubsetTest(unittest.TestCase):
@@ -68,6 +70,21 @@ class BitableAnalyzeSubsetTest(unittest.TestCase):
 
         self.assertFalse(AnalysisResult.from_v1_guess(medium, job).is_high_confidence)
         self.assertTrue(AnalysisResult.from_v1_guess(high, job).is_high_confidence)
+
+    def test_transient_inference_failures_remain_retryable(self):
+        result = AnalysisResult(
+            job_id="src:1",
+            url="https://e/retry",
+            industry="",
+            function="",
+            guessed_employer=None,
+            confidence="low",
+            confidence_score=0.0,
+            reasoning="timeout",
+            review_flags=["per_job_timeout: exceeded 1080s"],
+        )
+
+        self.assertTrue(result.is_retryable_failure())
 
     def test_daily_subset_requires_senior_tech_business_role_or_ai_leadership(self):
         jobs = [

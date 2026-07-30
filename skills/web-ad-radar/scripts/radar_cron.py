@@ -253,12 +253,15 @@ def run_cron(
         )
         log.info("Wrote %d/%d analysis results back to bitable", written, len(analysis_results))
         for result in analysis_results:
+            if result.is_retryable_failure():
+                log.warning("Leaving %s pending after retryable inference failure", result.job_id)
+                continue
             store.mark_analysis_completed(
                 result.job_id,
                 completed_at=now_utc_iso(),
                 guessed_employer=result.guessed_employer,
                 confidence=result.confidence_score,
-                evidence=result.external_sources,
+                evidence=result.evidence,
                 reasoning=result.reasoning,
             )
         if analysis_log_table_id:
