@@ -12,7 +12,7 @@ from radar.models import JobRecord  # noqa: E402
 from radar.bitable.sync import SyncStats  # noqa: E402
 import radar_cron  # noqa: E402
 import cron_watchdog  # noqa: E402
-from radar_cron import _jobs_new_in_bitable  # noqa: E402
+from radar_cron import _jobs_eligible_for_analysis, _jobs_new_in_bitable  # noqa: E402
 
 
 class RadarCronAnalysisQueueTest(unittest.TestCase):
@@ -26,6 +26,19 @@ class RadarCronAnalysisQueueTest(unittest.TestCase):
         result = _jobs_new_in_bitable([new_job, updated_job], stats)
 
         self.assertEqual([job.id for job in result], [new_job.id])
+
+    def test_only_unanalyzed_target_jobs_enter_employer_analysis(self):
+        target = JobRecord("source", "Source", "AI总监", "https://e/target")
+        target.is_target_job = True
+        non_target = JobRecord("source", "Source", "财务经理", "https://e/non-target")
+        non_target.is_target_job = False
+        completed = JobRecord("source", "Source", "芯片销售总监", "https://e/completed")
+        completed.is_target_job = True
+        completed.analysis_completed_at = "2026-08-08T00:00:00Z"
+
+        result = _jobs_eligible_for_analysis([target, non_target, completed])
+
+        self.assertEqual([target.id], [job.id for job in result])
 
 class CronWatchdogRetryTest(unittest.TestCase):
     def test_stale_success_retries_after_completion_window(self):
@@ -57,6 +70,8 @@ class RadarCronCrawlFailureTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         cmd = run.call_args.args[0]
         self.assertEqual(cmd[0], sys.executable)
+        self.assertEqual("180", cmd[cmd.index("--timeout") + 1])
+        self.assertEqual(1800, run.call_args.kwargs["timeout"])
 
     def test_crawl_exit_one_aborts_without_syncing_old_database(self):
         env = {

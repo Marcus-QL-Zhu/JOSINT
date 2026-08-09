@@ -2,7 +2,7 @@
 
 Wraps the existing CLI by importing adapters, store, and report modules.
 Adds:
-  - per-source timeout (90s default)
+  - hard per-source timeout (180s default)
   - incremental DB writes (one source finished -> immediately upsert + write report)
   - per-source error capture (one slow/broken source does not block the rest)
 
@@ -11,10 +11,12 @@ Does NOT modify radar/cli.py or any business code in radar/.
 from __future__ import annotations
 
 import argparse
+import multiprocessing
 import os
+import pickle
 import sys
+import tempfile
 import traceback
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -29,19 +31,76 @@ from radar.sources import build_adapters
 from radar.storage import JobStore
 
 
-def crawl_with_timeout(adapter, run_date: str, date_from: str, date_to: str, timeout_s: int):
-    """Run adapter.crawl in a thread with a timeout. Returns (jobs, error_str)."""
-    def _run():
-        return adapter.crawl(run_date, date_from=date_from, date_to=date_to)
+def _crawl_source_worker(
+    slug: str,
+    max_jobs: int,
+    target_job_count_without_dates: int,
+    run_date: str,
+    date_from: str,
+    date_to: str,
+    result_path: str,
+) -> None:
+    """Run one registered adapter in an isolated process and persist its result."""
+    try:
+        adapter = build_adapters([slug])[0]
+        adapter.max_jobs = max_jobs
+        adapter.target_job_count_without_dates = target_job_count_without_dates
+        payload = (
+            "ok",
+            adapter.crawl(run_date, date_from=date_from, date_to=date_to),
+        )
+    except Exception as exc:  # noqa: BLE001
+        payload = (
+            "error",
+            f"EXCEPTION: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+        )
+    with open(result_path, "wb") as result_file:
+        pickle.dump(payload, result_file)
 
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(_run)
-        try:
-            return future.result(timeout=timeout_s), None
-        except FutureTimeout:
+
+def crawl_with_timeout(adapter, run_date: str, date_from: str, date_to: str, timeout_s: int):
+    """Run adapter.crawl in a killable child process. Returns (jobs, error_str)."""
+    result_file = tempfile.NamedTemporaryFile(prefix="josint-crawl-", suffix=".pkl", delete=False)
+    result_path = result_file.name
+    result_file.close()
+    context = multiprocessing.get_context("spawn")
+    process = context.Process(
+        target=_crawl_source_worker,
+        args=(
+            adapter.slug,
+            adapter.max_jobs,
+            adapter.target_job_count_without_dates,
+            run_date,
+            date_from,
+            date_to,
+            result_path,
+        ),
+    )
+    try:
+        process.start()
+        process.join(timeout_s)
+        if process.is_alive():
+            process.terminate()
+            process.join(5)
+            if process.is_alive() and hasattr(process, "kill"):
+                process.kill()
+                process.join(5)
             return [], f"TIMEOUT after {timeout_s}s"
-        except Exception as exc:
-            return [], f"EXCEPTION: {type(exc).__name__}: {exc}\n{traceback.format_exc()}"
+        if process.exitcode != 0:
+            return [], f"WORKER EXIT {process.exitcode}"
+        with open(result_path, "rb") as result_stream:
+            status, payload = pickle.load(result_stream)
+        return (payload, None) if status == "ok" else ([], payload)
+    except Exception as exc:  # noqa: BLE001
+        return [], f"EXCEPTION: {type(exc).__name__}: {exc}\n{traceback.format_exc()}"
+    finally:
+        if process.is_alive():
+            process.terminate()
+            process.join(5)
+        try:
+            os.unlink(result_path)
+        except OSError:
+            pass
 
 
 def main() -> int:
@@ -49,7 +108,7 @@ def main() -> int:
     parser.add_argument("--workspace", default=".", help="Runtime workspace.")
     parser.add_argument("--data-dir", default="data", help="Data dir relative to workspace.")
     parser.add_argument("--output-dir", default="reports", help="Output dir relative to workspace.")
-    parser.add_argument("--timeout", type=int, default=90, help="Per-source timeout in seconds.")
+    parser.add_argument("--timeout", type=int, default=180, help="Hard per-source timeout in seconds.")
     parser.add_argument("--max-jobs", type=int, default=30, help="Max jobs per source.")
     parser.add_argument("--companies", default=None, help="Comma-separated slugs; default = all enabled.")
     parser.add_argument("--report-prefix", default=os.environ.get("JOSINT_REPORT_PREFIX", "josint"), help="Markdown report filename prefix.")

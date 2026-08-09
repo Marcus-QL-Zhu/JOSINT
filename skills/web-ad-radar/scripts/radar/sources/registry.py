@@ -97,6 +97,7 @@ class HaysAdapter(SourceAdapter):
     include_url_patterns = ("/jobs/",)
     exclude_url_patterns = SourceAdapter.exclude_url_patterns + ("/jobs?page=", "/zh-cn/jobs")
     job_url_regex = r"(?:^\.?/jobs/|/jobs/)[^?/#]+-\d+/?$"
+    detail_fetch_workers = 8
     max_pages = 3
 
     def _clean_title(self, value: str, href: str) -> str:

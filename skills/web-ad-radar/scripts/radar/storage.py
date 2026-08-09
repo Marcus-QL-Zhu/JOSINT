@@ -285,10 +285,9 @@ class JobStore:
                                       THEN excluded.content_hash ELSE canonical_jobs.content_hash END,
                     industry_label=COALESCE(excluded.industry_label, canonical_jobs.industry_label),
                     function_label=COALESCE(excluded.function_label, canonical_jobs.function_label),
-                    seniority_label=COALESCE(excluded.seniority_label, canonical_jobs.seniority_label),
-                    is_target_job=MAX(canonical_jobs.is_target_job, excluded.is_target_job),
-                    target_reason=CASE WHEN excluded.is_target_job=1 THEN excluded.target_reason
-                                       ELSE canonical_jobs.target_reason END,
+                    seniority_label=excluded.seniority_label,
+                    is_target_job=excluded.is_target_job,
+                    target_reason=excluded.target_reason,
                     first_seen_at=COALESCE(canonical_jobs.first_seen_at, excluded.first_seen_at),
                     last_seen_at=MAX(COALESCE(canonical_jobs.last_seen_at,''), COALESCE(excluded.last_seen_at,'')),
                     observation_count=(SELECT count(*) FROM source_observations
@@ -304,6 +303,7 @@ class JobStore:
                 ),
             )
             self._refresh_canonical_aggregates(conn, canonical_id)
+            self._refresh_target_decision(conn, canonical_id)
             conn.commit()
         return canonical_id
 
@@ -387,6 +387,40 @@ class JobStore:
                 json.dumps(upstream_sources, ensure_ascii=False), canonical_id,
             ),
         )
+
+    def _refresh_target_decision(self, conn: sqlite3.Connection, canonical_id: str) -> None:
+        row = conn.execute(
+            "SELECT * FROM canonical_jobs WHERE canonical_job_id=?",
+            (canonical_id,),
+        ).fetchone()
+        if not row:
+            return
+        decision = evaluate_target(self._canonical_row_to_job(row))
+        conn.execute(
+            """
+            UPDATE canonical_jobs
+            SET is_target_job=?, target_reason=?, seniority_label=?
+            WHERE canonical_job_id=?
+            """,
+            (
+                int(decision.is_target),
+                decision.reason,
+                decision.seniority_label,
+                canonical_id,
+            ),
+        )
+
+    def refresh_target_decisions(self) -> int:
+        """Re-evaluate all canonical jobs against the current targeting rules."""
+        with closing(self._connect()) as conn:
+            ids = [
+                row["canonical_job_id"]
+                for row in conn.execute("SELECT canonical_job_id FROM canonical_jobs").fetchall()
+            ]
+            for canonical_id in ids:
+                self._refresh_target_decision(conn, canonical_id)
+            conn.commit()
+        return len(ids)
 
     def get_job(self, job_id: str) -> JobRecord | None:
         with closing(self._connect()) as conn:

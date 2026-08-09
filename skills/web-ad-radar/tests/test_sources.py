@@ -408,6 +408,7 @@ class SourceAdapterTest(unittest.TestCase):
 
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0].title, "Brand Manager")
+        self.assertEqual(8, adapter.detail_fetch_workers)
 
     def test_hays_uses_listing_text_when_encoded_slash_detail_404s(self):
         from radar.sources.registry import HaysAdapter

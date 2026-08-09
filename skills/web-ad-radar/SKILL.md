@@ -53,6 +53,10 @@ API usage is appended to `data/api_usage.jsonl` with provider, stage, model, suc
 
 For OpenClaw/server deployments, `scripts/radar_cron.py` can crawl, sync to Feishu Bitable, run subset employer analysis, and send an optional Feishu notification. It uses the same relative `--workspace`, `--env`, `--output-dir`, and `--data-dir` path model as the local Codex runner.
 
+The scheduled pipeline syncs every canonical job observed for the business date to Feishu. The is_target_job and target_reason fields explain whether a row matches the configured seniority, industry, and function rules. Only target rows that have not completed analysis are sent to MiniMax-M3 and Metaso; non-target rows remain available in Feishu as an unanalysed market overview.
+
+Source crawls run in isolated child processes. Runtime limits are configurable with JOSINT_SOURCE_TIMEOUT (default 180 seconds per source), JOSINT_CRAWL_TIMEOUT (default 1800 seconds for all sources), and JOSINT_WATCHDOG_TIMEOUT (default 3600 seconds for a watchdog retry of the complete pipeline).
+
 ## APIs
 
 Read API keys from the workspace `.env`. Never print keys.

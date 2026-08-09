@@ -131,8 +131,8 @@ def run_cron(
         log.info("Step 1: skipping crawl (--skip-crawl)")
         crawl_exit = 0
     else:
-        log.info("Step 1: crawling 8 sources via per_source_runner")
-        crawl_exit = _run_per_source_runner(workspace)
+        log.info("Step 1: crawling enabled sources via per_source_runner")
+        crawl_exit = _run_per_source_runner(workspace, env)
     if crawl_exit != 0:
         # Catastrophic: the crawl subprocess did not complete. Do not sync
         # stale local DB rows and mark the run as successful.
@@ -171,16 +171,16 @@ def run_cron(
     # snapshot of yesterday's job ads.
     yesterday = yesterday_business_iso(timezone_name)
     store = JobStore(workspace / "data" / "jobs.sqlite")
-    # Feishu receives only canonical target jobs. The unanalyzed constraint
-    # prevents M3/Metaso from being spent again on a job seen through another
-    # aggregator or during a later month.
+    # Feishu receives every canonical job observed for the business date so it
+    # remains a complete operational overview. Employer inference is still
+    # restricted to target jobs that have not already completed analysis.
+    refreshed_targets = store.refresh_target_decisions()
+    log.info("Refreshed targeting decisions for %d canonical jobs", refreshed_targets)
     all_jobs = store.list_canonical_jobs()
     jobs_today = store.list_canonical_jobs(
-        target_only=True, last_seen_at=yesterday
+        last_seen_at=yesterday
     )
-    jobs_to_analyze = [
-        job for job in jobs_today if not job.analysis_completed_at
-    ]
+    jobs_to_analyze = _jobs_eligible_for_analysis(jobs_today)
 
     sync_stats = syncer.sync_many(jobs_today, crawl_run_id=crawl_run_id)
     log.info("Sync done: %s", sync_stats.as_dict())
@@ -318,7 +318,7 @@ def run_cron(
     return 0 if sync_stats.failed == 0 else 1
 
 
-def _run_per_source_runner(workspace: Path) -> int:
+def _run_per_source_runner(workspace: Path, env: dict[str, str] | None = None) -> int:
     """Invoke the per_source_runner.py script and return its exit code.
 
     Note: per_source_runner is designed to crawl the PREVIOUS day
@@ -329,22 +329,25 @@ def _run_per_source_runner(workspace: Path) -> int:
     last_seen_at matches yesterday.
     """
     import subprocess
+    env = env or {}
+    source_timeout = int(env.get("JOSINT_SOURCE_TIMEOUT", "180"))
+    crawl_timeout = int(env.get("JOSINT_CRAWL_TIMEOUT", "1800"))
     cmd = [
         sys.executable, str(workspace / "scripts" / "per_source_runner.py"),
         "--workspace", ".",
-        "--timeout", "120",
+        "--timeout", str(source_timeout),
         "--max-jobs", "30",
     ]
     log.info("Running: %s", " ".join(cmd))
     try:
-        result = subprocess.run(cmd, cwd=workspace, capture_output=True, text=True, timeout=900)
+        result = subprocess.run(cmd, cwd=workspace, capture_output=True, text=True, timeout=crawl_timeout)
         if result.returncode != 0:
             log.error("per_source_runner failed: %s", result.stderr[-500:])
         else:
             log.info("per_source_runner output: %s", result.stdout[-500:])
         return result.returncode
     except subprocess.TimeoutExpired:
-        log.error("per_source_runner timed out")
+        log.error("per_source_runner timed out after %ds", crawl_timeout)
         return 2
 
 
@@ -354,6 +357,15 @@ def _jobs_new_in_bitable(jobs: list[Any], sync_stats: Any) -> list[Any]:
     if not new_ids:
         return []
     return [job for job in jobs if getattr(job, "id", None) in new_ids]
+
+
+def _jobs_eligible_for_analysis(jobs: list[Any]) -> list[Any]:
+    """Return target jobs that have not completed hidden-employer analysis."""
+    return [
+        job for job in jobs
+        if getattr(job, "is_target_job", False)
+        and not getattr(job, "analysis_completed_at", None)
+    ]
 
 
 def _ensure_canonical_bitable_fields(client: BitableClient) -> None:

@@ -92,7 +92,8 @@ def trigger_cron(workspace: Path, env: dict[str, str]) -> int:
 
         log.info("Triggering radar_cron.py (retry %d/%d)", state["retry_count"], MAX_RETRIES)
         cmd = [sys.executable, str(workspace / "scripts" / "radar_cron.py"), "--workspace", str(workspace)]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        watchdog_timeout = int(env.get("JOSINT_WATCHDOG_TIMEOUT", "3600"))
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=watchdog_timeout)
         log.info("radar_cron.py finished: exit=%d", result.returncode)
         if result.stdout:
             log.info("stdout: %s", result.stdout[-500:])
@@ -100,7 +101,7 @@ def trigger_cron(workspace: Path, env: dict[str, str]) -> int:
             log.info("stderr: %s", result.stderr[-500:])
         return result.returncode
     except subprocess.TimeoutExpired:
-        log.error("radar_cron.py timed out after 900s")
+        log.error("radar_cron.py timed out after %ds", watchdog_timeout)
         return 2
     finally:
         try:

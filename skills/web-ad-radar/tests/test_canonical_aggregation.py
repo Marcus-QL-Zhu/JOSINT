@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
@@ -71,6 +72,26 @@ class CanonicalStoreTest(unittest.TestCase):
         self.assertTrue(evaluate_target(director).is_target)
         self.assertFalse(evaluate_target(manager).is_target)
         self.assertFalse(evaluate_target(hr).is_target)
+
+    def test_refresh_target_decisions_removes_stale_target_flag(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = JobStore(Path(directory) / "jobs.sqlite")
+            store.upsert_job(job(
+                "hays",
+                "https://careers.hays-china.cn/jobs/finance-manager-1",
+                title="财务经理",
+                jd_text="负责财务、会计、税务和审计工作。",
+            ))
+            with closing(store._connect()) as conn:
+                conn.execute("UPDATE canonical_jobs SET is_target_job=1")
+                conn.commit()
+
+            refreshed = store.refresh_target_decisions()
+            canonical = store.list_canonical_jobs()[0]
+
+            self.assertEqual(1, refreshed)
+            self.assertFalse(canonical.is_target_job)
+            self.assertIn("低于总监级", canonical.target_reason)
 
 
 class AggregatorSafetyTest(unittest.TestCase):
