@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -83,6 +84,19 @@ class ConfigModelsTest(unittest.TestCase):
             self.assertEqual(values["MINIMAX_API_KEY"], "test-value")
             self.assertEqual(values["METASO_API_KEY"], "mk-test")
             self.assertEqual(values["EMPTY"], "")
+
+    def test_feishu_secret_can_be_inherited_or_loaded_from_openclaw(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            shared_dir = home / ".openclaw"
+            shared_dir.mkdir()
+            (shared_dir / ".env").write_text("FEISHU_APP_SECRET=shared-test\n", encoding="utf-8")
+            env_file = home / "radar.env"
+            env_file.write_text("FEISHU_APP_SECRET=${FEISHU_APP_SECRET}\n", encoding="utf-8")
+            with patch.dict(os.environ, {"FEISHU_APP_SECRET": "inherited-test"}):
+                self.assertEqual(load_env(env_file)["FEISHU_APP_SECRET"], "inherited-test")
+            with patch.dict(os.environ, {}, clear=True), patch.object(Path, "home", return_value=home):
+                self.assertEqual(load_env(env_file)["FEISHU_APP_SECRET"], "shared-test")
 
     def test_job_record_has_stable_id_from_source_and_url(self):
         job = JobRecord(

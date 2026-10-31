@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 
@@ -14,5 +15,16 @@ def load_env(path: Path) -> dict[str, str]:
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
             value = value[1:-1]
         values[key.strip()] = value
+    if values.get("FEISHU_APP_SECRET") == "${FEISHU_APP_SECRET}":
+        secret = os.environ.get("FEISHU_APP_SECRET")
+        if not secret:
+            shared_env = Path.home() / ".openclaw" / ".env"
+            for line in shared_env.read_text(encoding="utf-8").splitlines():
+                if line.startswith("FEISHU_APP_SECRET="):
+                    secret = line.split("=", 1)[1].strip()
+                    break
+        if not secret:
+            raise ValueError("FEISHU_APP_SECRET is not available")
+        values["FEISHU_APP_SECRET"] = secret
     return values
 
